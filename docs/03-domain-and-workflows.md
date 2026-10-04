@@ -125,3 +125,8 @@ stateDiagram-v2
 - Какие справочники материалов и сроки перевозки нужны без моделирования медицинских нормативов?
 
 Выбранные решения и их последствия зафиксированы также в [Decision Log](05-design-decisions.md).
+
+## Следующий уровень спецификации
+
+- [PostgreSQL Data Model & ERD](06-data-model.md) — физические таблицы и гарантии БД.
+- [Workflows, Transactions & Concurrency](07-transactions-and-concurrency.md) — команды, транзакционные границы, блокировки, idempotency и тестовая матрица.
