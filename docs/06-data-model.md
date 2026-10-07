@@ -1,8 +1,12 @@
 # LabTrack — PostgreSQL Data Model & ERD
 
-**Версия:** 0.3 (проект спецификации)  
+> **Исторический документ (до v0.6).** Здесь могут встречаться устаревшие правила передачи всей партии, одностороннего разрешения контейнерных проблем и old API paths. Актуальные и приоритетные требования: [Decisions v0.6](15-decisions-v06.md), [Domain v0.6](16-domain-workflows-v06.md), [Data Model v0.6](17-data-model-v06.md), [API v0.6](18-api-v06.md). Не использовать этот документ в одиночку как нормативный контракт.
+
+**Версия:** 0.5 (базовая ERD и инварианты; полное расширение — [v0.5 delta](12-data-model-v05.md))  
 **Статус:** proposed for implementation; согласованные бизнес-решения — [Decision Log](05-design-decisions.md).  
-**Scope:** пилотный регион, несколько отправителей, одна лаборатория назначения на Shipment, синтетические данные.
+**Scope:** пилотный регион, несколько отправителей, **одна центральная лаборатория**, синтетические данные.
+
+> **Примечание:** ERD ниже показывает базовые таблицы. В v0.5 добавлены `container_issues`, `issue_reason_codes`, `receiving_sessions`, `receipt_revisions`, `sample_external_references` и два новых состояния. Актуальное физическое расширение и DB triggers описаны в [Data Model v0.5](12-data-model-v05.md); не следует считать старую диаграмму полной схемой v0.5.
 
 ## 1. Архитектурные решения
 
@@ -160,7 +164,7 @@ erDiagram
 | `samples` | `id UUID PK`, `code TEXT NOT NULL`, `origin_organization_id UUID NOT NULL`, `material_type TEXT NOT NULL`, `collected_at TIMESTAMPTZ NULL`, `created_by UUID NOT NULL` | `UNIQUE(code)`; FK organization/user; без пациента, диагноза или результата анализа |
 | `shipments` | `id UUID PK`, `code TEXT NOT NULL`, `region_id UUID NOT NULL`, `sender_org_id UUID NOT NULL`, `destination_org_id UUID NOT NULL`, `courier_user_id UUID NULL`, `status TEXT NOT NULL DEFAULT 'DRAFT'`, `version INTEGER NOT NULL DEFAULT 1`, `expected_delivery_at TIMESTAMPTZ NULL`, `sealed_at TIMESTAMPTZ NULL`, `completed_at TIMESTAMPTZ NULL`, `cancel_reason TEXT NULL` | `UNIQUE(code)`, `CHECK(version > 0)`, `CHECK(sender_org_id <> destination_org_id)`, CHECK status из `9`; составные FK (`sender_org_id,region_id`) и (`destination_org_id,region_id`) к `organizations(id,region_id)` |
 | `transport_containers` | `id UUID PK`, `shipment_id UUID NOT NULL`, `code TEXT NOT NULL`, `created_by UUID NOT NULL` | FK shipment/user; `UNIQUE(code)`; удалять/переносить только до seal |
-| `container_items` | `id UUID PK`, `container_id UUID NOT NULL`, `sample_id UUID NOT NULL`, `receipt_result TEXT NULL`, `receipt_reason TEXT NULL`, `receipt_recorded_by UUID NULL`, `receipt_recorded_at TIMESTAMPTZ NULL` | FK container/sample/user; **`UNIQUE(sample_id)`** на весь MVP; CHECK для результата/причины/времени, см. `4` |
+| `container_items` | `id UUID PK`, `container_id UUID NOT NULL`, `sample_id UUID NOT NULL`, `receipt_result TEXT NULL`, `receipt_reason_code_id UUID NULL`, `receipt_comment TEXT NULL`, `receipt_recorded_by UUID NULL`, `receipt_recorded_at TIMESTAMPTZ NULL` | FK container/sample/user; **`UNIQUE(sample_id)`** на весь MVP; CHECK для результата/причины/времени, см. `4` |
 
 `shipments.region_id` намеренно дублирует регион: два составных FK исключают смешение организаций разных регионов даже при последующем расширении продукта. Правило `samples.origin_organization_id = shipments.sender_org_id` нельзя выразить простым CHECK через существующие таблицы — проверяем в транзакционном доменном сервисе.
 
@@ -184,27 +188,20 @@ erDiagram
 
 ## 4. CHECK-ограничения, которые нельзя оставлять только в Python
 
-**`container_items`:**
+**`container_items` (v0.5):**
 
-~~~sql
+```sql
 CHECK (
-  (receipt_result IS NULL
-   AND receipt_reason IS NULL
-   AND receipt_recorded_at IS NULL
-   AND receipt_recorded_by IS NULL)
-  OR
-  (receipt_result = 'ACCEPTED'
-   AND receipt_reason IS NULL
-   AND receipt_recorded_at IS NOT NULL
-   AND receipt_recorded_by IS NOT NULL)
-  OR
-  (receipt_result IN ('MISSING', 'REJECTED')
-   AND receipt_reason IS NOT NULL
-   AND length(btrim(receipt_reason)) > 0
-   AND receipt_recorded_at IS NOT NULL
-   AND receipt_recorded_by IS NOT NULL)
-)
-~~~
+    (receipt_result IS NULL AND receipt_reason_code_id IS NULL AND
+     receipt_comment IS NULL AND receipt_recorded_at IS NULL AND receipt_recorded_by IS NULL)
+ OR (receipt_result = 'ACCEPTED' AND receipt_reason_code_id IS NULL AND
+     receipt_comment IS NULL AND receipt_recorded_at IS NOT NULL AND receipt_recorded_by IS NOT NULL)
+ OR (receipt_result IN ('MISSING','REJECTED') AND receipt_reason_code_id IS NOT NULL
+     AND receipt_recorded_at IS NOT NULL AND receipt_recorded_by IS NOT NULL)
+);
+```
+
+Причина должна соответствовать `scope=SAMPLE,kind=receipt_result` — через composite FK или защищённую проверку БД + service validation. Все изменения пробирок во время receiving порождают append-only `receipt_revisions`.
 
 **`handoffs`:** разрешённые комбинации состояния:
 - `PENDING`: только initiator и `initiated_at`, confirmer/withdrawn_at отсутствуют;
@@ -219,7 +216,7 @@ CREATE UNIQUE INDEX uq_handoffs_not_withdrawn
     WHERE status IN ('PENDING', 'CONFIRMED');
 ~~~
 
-**`shipments`:** `status` ограничен `DRAFT`, `READY_FOR_PICKUP`, `PICKUP_PENDING`, `IN_TRANSIT`, `DELIVERY_PENDING`, `RECEIVING`, `COMPLETED`, `COMPLETED_WITH_ISSUES`, `CANCELLED`. Синхронизацию `sealed_at`/`completed_at` со статусом проверяет сервис; простой CHECK не способен проверить состав партии и результаты.
+**`shipments`:** `status` ограничен `DRAFT`, `READY_FOR_PICKUP`, `PICKUP_PENDING`, `IN_TRANSIT`, `DELIVERY_PENDING`, `DELIVERY_BLOCKED`, `RECEIVING`, `COMPLETED`, `COMPLETED_WITH_ISSUES`, `CLOSED_UNDELIVERED`, `CANCELLED`. Синхронизацию `sealed_at`/`completed_at` со статусом проверяет сервис; простой CHECK не способен проверить состав партии и результаты.
 
 ## 5. Индексы (начальный набор)
 
@@ -279,7 +276,7 @@ Unique-ограничения сами создают необходимые у�
 | Запрещённые переходы статусов | State machine в domain service; `CHECK` гарантирует только допустимый набор строк |
 | Идемпотентные повторные запросы | `UNIQUE(actor_id,operation,key)` + транзакционная проверка payload hash и результата |
 
-Для строгой защиты от обхода сервисного слоя целесообразно добавить DB trigger на изменение манифеста после seal. В первой миграции можно опираться на единственный сервисный write path и блокировки с негативными тестами, но это **не эквивалентно абсолютной неизменяемости на уровне БД**.
+**Решение v0.5:** PostgreSQL triggers для запрета изменения sealed manifest обязательны уже в MVP вместе с сервисными проверками. Прямой SQL UPDATE/DELETE/INSERT после seal должен быть отвергнут; trigger и seal сериализуются под родительской блокировкой Shipment. См. [v0.5 delta](12-data-model-v05.md).
 
 ## 8. Объём данных и миграции
 
@@ -298,3 +295,7 @@ Unique-ограничения сами создают необходимые у�
 5. Пересмотр ограничения `UNIQUE(sample_id)` при отменённой партии — только отдельным решением с моделью повторных перевозок.
 
 См. [Workflows, Transactions & Concurrency](07-transactions-and-concurrency.md) для правил сериализации команд и acceptance tests.
+
+## 10. Расширение модели v0.5
+
+Базовая ERD остаётся как учебно-архитектурный фундамент, но не является полной актуальной схемой. [Data Model Delta](12-data-model-v05.md) определяет новые сущности и ограничения: контейнерные инциденты, коды причин, версии приёмки и её reopening, opaque LIS references, замороженную `manifest_revision`, региональные роли и trigger-guards. [Offline Protocol](11-offline-sync-protocol.md) использует те же транзакционные команды.

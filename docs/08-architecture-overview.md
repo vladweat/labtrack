@@ -1,20 +1,22 @@
 # LabTrack — Architecture Overview
 
-**Версия:** 0.4 · **Статус:** проект архитектуры для реализации MVP (код ещё не реализован).  
+> **Исторический документ (до v0.6).** Здесь могут встречаться устаревшие правила передачи всей партии, одностороннего разрешения контейнерных проблем и old API paths. Актуальные и приоритетные требования: [Decisions v0.6](15-decisions-v06.md), [Domain v0.6](16-domain-workflows-v06.md), [Data Model v0.6](17-data-model-v06.md), [API v0.6](18-api-v06.md). Не использовать этот документ в одиночку как нормативный контракт.
+
+**Версия:** 0.5 · **Статус:** проект архитектуры для реализации MVP (код ещё не реализован).  
 **Согласованный product scope:** [Vision](01-product-vision.md), [Decision Log](05-design-decisions.md).  
-**Спецификации:** [Data Model](06-data-model.md), [Transactions](07-transactions-and-concurrency.md), [REST API](09-api-specification.md).
+**Спецификации:** [Data Model](06-data-model.md), [Transactions](07-transactions-and-concurrency.md), [REST API](09-api-specification.md), [OpenAPI 3.1 draft](../openapi/labtrack-v1.json).
 
 ## 1. Контекст и цели
 
 LabTrack — внутренний региональный сервис прослеживаемости лабораторных пробирок, объединённых в маркированные транспортные контейнеры и партии. Участники: учреждение-отправитель, назначенный курьер, лаборатория назначения и региональный аналитик.
 
-Основные требования: индивидуальная прослеживаемость пробирки; **двустороннее подтверждение** выдачи и доставки контейнеров; раздельная поэкземплярная приёмка; только два исключения `MISSING` и `REJECTED`; аудит, организационная изоляция, согласованность при конкурентных запросах.
+Основные требования: индивидуальная прослеживаемость пробирки; **двустороннее подтверждение** выдачи и доставки контейнеров; поэкземплярная приёмка; две категории исключений `MISSING` и `REJECTED` на уровне SAMPLE/CONTAINER; блокировка недоставки, reopening Lab Manager, Courier offline sync, аудит, организационная изоляция и согласованность.
 
 Приложение **не** заменяет ЛИС/МИС, не хранит данные реальных пациентов, не выполняет исследования, не определяет клиническую пригодность, не заявляет GPS-отслеживание или юридически значимую электронную подпись. В демонстрации используются только синтетические данные.
 
 ## 2. Выбранная архитектура
 
-**Modular monolith + PostgreSQL как system of record.** Один FastAPI process для REST API, отдельно Celery worker/beat для необязательных фоновых задач, Redis как broker/cache. Внешние API и AI не обязательны для MVP.
+**Modular monolith + PostgreSQL как system of record.** Один FastAPI process для REST API, отдельно Celery worker/beat для необязательных фоновых задач, Redis как broker/cache. Внешние API и AI не обязательны для MVP. Дополнительно у Courier есть PWA с минимальной offline-очередью; её команды применяются к PostgreSQL только после защищённой синхронизации.
 
 ~~~mermaid
 flowchart TB
@@ -97,7 +99,7 @@ backend/
 
 - **Authentication:** email + пароль, защищённый Argon2id (или сопоставимым современным password hasher), Bearer access token с коротким сроком жизни; сервер независимо проверяет активность пользователя. Refresh tokens/SSO — P1. В MVP допускается повторный login по истечении access token.
 - **Principal / Actor:** `user_id`, активные organization memberships (с ролями), региональные роли; брать из проверенной учётной записи/БД, не из произвольных заголовков клиента.
-- **Subject scope:** Sender читает только свои отправления и образцы; Lab — только адресованные лаборатории; Courier — только назначенные партии; Org Admin управляет только membership своей организации; Regional Analyst получает агрегаты по своему региону, не чтение отдельных пробирок.
+- **Subject scope:** Sender читает только свои отправления и образцы; Lab — только адресованные лаборатории; Courier — только назначенные партии; LAB_MANAGER повторно открывает приёмку в своей лаборатории; REGIONAL_OPERATIONS вручную разрешает блокировки в своём регионе; Org Admin управляет membership своей организации; Regional Analyst получает только региональные агрегаты.
 - **RBAC + ownership checks** в query/use case. Случайные UUID и QR-коды **не** являются средствами авторизации.
 - Для Courier в пилоте допустима активная роль `COURIER` в логистической организации **того же региона**, что и партия; назначение подтверждает Sender, пока не добавлен dispatcher. При чтении курьер фильтруется по `courier_user_id` и членству в регионе.
 - Identity provider, password reset, многофакторная аутентификация и юридически значимые подписи не входят в MVP. Для эксплуатации с реальными медицинскими данными потребуется самостоятельное security/compliance-проектирование.
@@ -118,7 +120,7 @@ backend/
 
 **Idempotency:** для критичных write commands хранить `(actor_id,operation,key,request_hash,response)` в PostgreSQL в одной транзакции с изменениями и аудитом. Повтор с тем же payload возвращает сохранённый ответ, с другим → `409 IDEMPOTENCY_KEY_REUSED`. Примерный TTL 24 часа (предлагаемая настройка, не продемонстрированная гарантия). Post-commit уведомления в P0 best-effort; потеря публикации возможна и должна быть явно обозначена.
 
-**Граница гарантии неизменности:** сервисный слой + права БД. Защитный PostgreSQL trigger для запрета модификации sealed manifest рекомендуется добавить до production deployment; до этого не утверждать, что любое прямое SQL-изменение физически невозможно.
+**Решение v0.5:** обязательны и сервисные ограничения, и PostgreSQL triggers, блокирующие изменения идентичности/состава sealed manifest даже прямым SQL. Изменение результатов при повторно открытой receiving session разрешено с append-only revisions. Пока это **план реализации**, не работающая гарантия.
 
 Подробный порядок и тесты: [Transactions & Concurrency](07-transactions-and-concurrency.md).
 
@@ -141,14 +143,25 @@ backend/
 
 Реализацию начинаем с skeleton/config/migrations, затем auth/access, samples/containers, handoff, receiving, dashboard. Не вводим микросервисы или AI до успешного сквозного MVP.
 
-## 9. Предлагаемые default-решения, требующие product approval
+## 9. Утверждённые решения и оставшиеся операционные допущения
 
 В следующих документах эти пункты являются **рабочими допущениями**, а не заменой принятых DEC-001–003:
 
-- Sender Operator назначает активного Courier своего региона **только пока Shipment DRAFT**; dispatcher не требуется.
-- В `RECEIVING` Lab Operator может исправить неверную отметку с обязательной записью в audit; после финализации исправление запрещено.
-- `MISSING`/`REJECTED` требуют непустой текстовой причины (до согласования справочника кодов).
-- QR содержит только непрозрачный code, не пациентские данные; ожидаемые контейнеры при каждом handoff сверяются по полному набору их кодов, без `manifest_hash`.
+- **Утверждено:** Sender Operator назначает активного Courier своего региона **только пока Shipment DRAFT**; dispatcher не нужен.
+- **Утверждено:** в `RECEIVING` Lab Operator может исправить неверную отметку с receipt_revision и audit. LAB_MANAGER вправе повторно открыть завершённую приёмку с новой сессией и причиной.
+- **Утверждено:** `MISSING`/`REJECTED` требуют кода причины из справочника, комментарий необязателен. Обе категории применяются к SAMPLE и CONTAINER.
+- **Утверждено:** QR содержит только непрозрачный code без PHI; подтверждения сверяют полный манифест. Для Courier offline фиксируется `manifest_revision`, независимая от Shipment.version.
 - В MVP только синхронные REST write use cases и best-effort фоновые уведомления, без transactional outbox.
 
-**Важно:** ни один из этих default не требует менять три ранее согласованных базовых решения.
+**Открыто для операционного утверждения:** физическая ответственность за отклонённый контейнер, длительность ручной проверки offline-команд, конкретные reason codes и юридический смысл offline timestamps.
+
+См. [v0.5 Domain](10-domain-hardening-v05.md), [Courier Sync](11-offline-sync-protocol.md), [DB Delta](12-data-model-v05.md), [API Delta](13-api-v05.md).
+
+## 10. Изменения модулей и инфраструктуры v0.5
+
+- `shipments`: ContainerIssue, DELIVERY_BLOCKED/CLOSED_UNDELIVERED, manual resolution, receiving sessions and receipt revisions; all under Shipment lock.
+- `organizations`: отдельные roles LAB_MANAGER и REGIONAL_OPERATIONS без глобального bypass.
+- `samples`: синтетические opaque external LIS references (1:N).
+- `courier_offline`: PWA IndexedDB + sync API, без токенов в локальной очереди; синхронизация использует те же use cases, что online команды.
+- `notifications`: Celery best-effort; Dashboard обнаруживает зависшие операции независимо от Redis.
+- `database`: PostgreSQL triggers для sealed manifest, индексы reason codes/issues/sessions, тесты прямого SQL доступа и конкуренции.

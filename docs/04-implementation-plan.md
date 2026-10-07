@@ -1,15 +1,17 @@
 # LabTrack — план дальнейшей проработки
 
-**Версия:** 0.3 · **Тип:** ориентир для итераций, не обещание сроков.
+> **Исторический документ (до v0.6).** Здесь могут встречаться устаревшие правила передачи всей партии, одностороннего разрешения контейнерных проблем и old API paths. Актуальные и приоритетные требования: [Decisions v0.6](15-decisions-v06.md), [Domain v0.6](16-domain-workflows-v06.md), [Data Model v0.6](17-data-model-v06.md), [API v0.6](18-api-v06.md). Не использовать этот документ в одиночку как нормативный контракт.
+
+**Версия:** 0.5 · **Тип:** ориентир для итераций, не обещание сроков.
 
 ## 1. Порядок согласования документации
 
 | Шаг | Артефакт | Результат |
 |---|---|---|
 | 1 | Vision + PRD + Domain | Подтверждённые роли, ограничения, ключевые сценарии и инварианты |
-| 2 | [Workflows & Transactions](07-transactions-and-concurrency.md) + Architecture Overview | State machine и транзакционные правила спроектированы; общий architecture overview — следующий документ |
+| 2 | [Architecture Overview](08-architecture-overview.md) + [Workflows & Transactions](07-transactions-and-concurrency.md) | Границы модулей, state machine и транзакционные правила спроектированы (draft) |
 | 3 | [Data Model](06-data-model.md) | ERD, поля, FK/UNIQUE/CHECK и индексы **спроектированы**; Alembic migrations ещё не написаны |
-| 4 | API Specification | OpenAPI, schemas, error contract, pagination, idempotency, authorization — **ещё не создана** |
+| 4 | [REST API Specification](09-api-specification.md) + [OpenAPI v0.5 draft](../openapi/labtrack-v1.json) | Контракт расширен: blocked delivery, reopening, sync и reason codes; ещё не реализован |
 | 5 | Test Strategy | Unit/integration/E2E, concurrency и security tests, test data |
 | 6 | Development & Operations | Docker Compose, конфигурация, CI, логирование, миграции, runbooks |
 
@@ -58,8 +60,8 @@
 **Принятые решения (v0.2):**
 
 1. Каждая пробирка — отдельный `Sample`, включаемый в ровно один `TransportContainer`; партия содержит 1..N контейнеров.
-2. Два этапа двусторонней передачи: Sender + Courier при выдаче; Courier + Lab Operator при доставке. Первое подтверждение не завершает передачу.
-3. Только `MISSING` (недостача) и `REJECTED` (отказ в приёмке отдельной пробирки) являются исключениями в P0; подтверждение контейнера не проставляет приёмку пробирок.
+2. Два этапа двусторонней передачи: Sender + Courier при выдаче; Courier + Lab Operator при доставке. Первое подтверждение не завершает передачу; Courier может отправить своё подтверждение после offline sync.
+3. Только `MISSING` и `REJECTED` являются **категориями** исключений, на SAMPLE и CONTAINER. Контейнерная проблема блокирует доставку, не помечая дочерние пробирки.
 4. Для handoff достаточно аутентифицированных действий, без КЭП и юридически значимого документооборота.
 
 **Остаётся уточнить:**
@@ -86,8 +88,14 @@
 
 1. Зафиксировать дефолтную политику назначения Courier, коррекцию приёмки до закрытия, коды причин и формат QR.
 2. Подготовить архитектурное описание модулей и авторизации; выбрать один DB session/transaction boundary на use case.
-3. Сформировать API contract (OpenAPI, схемы входа/выхода, error codes, idempotency, status transitions).
+3. Проверить и утвердить [REST API contract](09-api-specification.md) и [OpenAPI draft](../openapi/labtrack-v1.json), затем зафиксировать стабильную v1-схему.
 4. Создать первую Alembic revision со всеми FK/UNIQUE/CHECK, протестировать миграции на PostgreSQL.
 5. Реализовать CRUD только в пределах доменных команд и покрыть матрицу негативных/конкурентных сценариев.
 
 > Спроектированная схема не означает существования миграций, таблиц или протестированного приложения.
+
+## 8. Текущий план реализации v0.5
+
+**Источник истины:** [Implementation Roadmap v0.5](14-implementation-plan-v05.md). Документ выше сохраняет исходную структуру этапов для исторического контекста; после опросника scope включает контейнерную блокировку доставки, LAB_MANAGER reopening, reason codes, PostgreSQL triggers и offline очередь курьера. Приоритеты: Foundation → Access → Manifest → Handoffs → Container exceptions → Receiving/Reopen → Offline → Operations/E2E.
+
+Документация спроектирована, но backend-код, миграции, CI и PWA **ещё не созданы**.

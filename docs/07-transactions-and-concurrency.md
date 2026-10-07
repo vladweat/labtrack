@@ -1,6 +1,8 @@
 # LabTrack — Workflows, Transactions & Concurrency
 
-**Версия:** 0.3 (проект спецификации)  
+> **Исторический документ (до v0.6).** Здесь могут встречаться устаревшие правила передачи всей партии, одностороннего разрешения контейнерных проблем и old API paths. Актуальные и приоритетные требования: [Decisions v0.6](15-decisions-v06.md), [Domain v0.6](16-domain-workflows-v06.md), [Data Model v0.6](17-data-model-v06.md), [API v0.6](18-api-v06.md). Не использовать этот документ в одиночку как нормативный контракт.
+
+**Версия:** 0.5 (базовые правила транзакций и v0.5 workflow)  
 **Статус:** design baseline для первой реализации, не работающий backend.  
 **Связанные документы:** [Data Model & ERD](06-data-model.md), [Domain Model](03-domain-and-workflows.md), [MVP Requirements](02-mvp-requirements.md).
 
@@ -15,40 +17,25 @@
 - Только результаты каждой пробирки — `ACCEPTED`, `MISSING`, `REJECTED` — определяют итог партии.
 - Изолированные по организациям пользователи видят только разрешённые ресурсы; `REGIONAL_ANALYST` читает только агрегаты.
 
-## 2. State machine партии
+## 2. State machine партии v0.5
 
-~~~mermaid
-stateDiagram-v2
-    [*] --> DRAFT
-    DRAFT --> READY_FOR_PICKUP: seal
-    DRAFT --> CANCELLED: cancel
-    READY_FOR_PICKUP --> CANCELLED: cancel
-    READY_FOR_PICKUP --> PICKUP_PENDING: confirm_release (Sender)
-    PICKUP_PENDING --> READY_FOR_PICKUP: withdraw_release (Sender)
-    PICKUP_PENDING --> IN_TRANSIT: confirm_pickup (Courier)
-    IN_TRANSIT --> DELIVERY_PENDING: confirm_delivery (Courier)
-    DELIVERY_PENDING --> IN_TRANSIT: withdraw_delivery (Courier)
-    DELIVERY_PENDING --> RECEIVING: confirm_receipt (Lab)
-    RECEIVING --> COMPLETED: all ACCEPTED
-    RECEIVING --> COMPLETED_WITH_ISSUES: any MISSING or REJECTED
-~~~
+Полная Mermaid state machine и условия переходов зафиксированы в [Domain Hardening](10-domain-hardening-v05.md) и [Domain Model](03-domain-and-workflows.md).
 
-| Команда | Инициатор | Проверка и эффект |
-|---|---|---|
-| `add_container / add_sample / move_sample` | Sender Operator отправителя | Только `DRAFT`; sample.origin_org = sender; изменение состава под lock партии |
-| `assign_courier` | Sender Operator (предлагаемый default) | Только `DRAFT`; активный Courier с разрешением в регионе |
-| `seal` | Sender Operator | ≥1 контейнер, каждый непустой; courier назначен; фиксирует `sealed_at` и `READY_FOR_PICKUP` |
-| `confirm_release` | Sender Operator | `READY_FOR_PICKUP` → `PICKUP_PENDING`; создаёт `PICKUP PENDING` handoff, фиксирует actor/time |
-| `confirm_pickup` | Назначенный Courier | `PICKUP_PENDING` → `IN_TRANSIT`; другой actor, подтверждает тот же manifest; handoff CONFIRMED |
-| `confirm_delivery` | Courier партии | `IN_TRANSIT` → `DELIVERY_PENDING`; создаёт `DELIVERY PENDING` handoff |
-| `confirm_receipt` | Lab Operator адресной лаборатории | `DELIVERY_PENDING` → `RECEIVING`; другой actor, handoff CONFIRMED, контейнеры получены, но пробирки не обработаны |
-| `withdraw_release` | Инициатор pending pickup | `PICKUP_PENDING` → `READY_FOR_PICKUP`; handoff WITHDRAWN, audit |
-| `withdraw_delivery` | Инициатор pending delivery | `DELIVERY_PENDING` → `IN_TRANSIT`; handoff WITHDRAWN, audit |
-| `record_receipt` | Lab Operator адресной лаборатории | Только `RECEIVING`, конкретная пробирка из sealed manifest; сохраняет статус, причину (если нужна), actor и audit |
-| `complete_receiving` | Lab Operator адресной лаборатории | Все container_items имеют результат; все ACCEPTED → COMPLETED, иначе COMPLETED_WITH_ISSUES |
-| `cancel` | Sender Operator | Только `DRAFT` или `READY_FOR_PICKUP`; причина обязательна |
+К базовым переходам добавлены:
+- `IN_TRANSIT/DELIVERY_PENDING → DELIVERY_BLOCKED` при `MISSING`/`REJECTED` контейнера; если Delivery Handoff был PENDING, он атомарно WITHDRAWN;
+- `DELIVERY_BLOCKED → IN_TRANSIT` при ручном RETRY_DELIVERY региональной операционной ролью (новый Delivery attempt);
+- `DELIVERY_BLOCKED → CLOSED_UNDELIVERED` при ручном CLOSE_UNDELIVERED;
+- `COMPLETED/COMPLETED_WITH_ISSUES → RECEIVING` только по LAB_MANAGER с причиной и новой receiving session.
 
-**Недопустимые переходы** должны возвращать предсказуемый `409 Conflict`. Отсутствие прав возвращает `403 Forbidden` либо маскирующий `404 Not Found` по единой политике. Нельзя изменять роль/назначение в середине подтверждения, минуя бизнес-проверки.
+Ни один контейнерный инцидент не присваивает результатов `container_items` автоматически. Исключения по пробиркам остаются только `MISSING`/`REJECTED`, но теперь требуют `reason_code`.
+
+| Use case | Atomic changes under Shipment lock |
+|---|---|
+| Report container issue | Create OPEN container_issue, withdraw pending Delivery handoff if any, DELIVERY_BLOCKED status, audit |
+| Resolve blocked shipment | Resolve/close all OPEN issues, set IN_TRANSIT or CLOSED_UNDELIVERED, audit |
+| Reopen receiving | Create new OPEN receiving session, change terminal result to RECEIVING, audit |
+| Correct sample result | Save new current result + immutable receipt_revision + audit; only OPEN session |
+| Sync Courier command | Idempotency reservation, Shipment lock, handoff, audit, response in one transaction |
 
 ## 3. Handoff: точные условия
 
@@ -68,7 +55,7 @@ stateDiagram-v2
 
 **Практическое условие:** каждый участник в интерфейсе сканирует/явно сверяет полный набор кодов контейнеров из sealed manifest. API принимает список кодов/ID подтверждённых контейнеров и сравнивает его как **множество** с ожидаемым набором (без дубликатов). Это защита от случайного подтверждения неверного контейнера, но не криптографическое доказательство физической передачи.
 
-Передача отдельных контейнеров, частичная выдача и отказ от всей партии в P0 не поддерживаются. Если контейнер отсутствует на этапе handoff, **второй участник не подтверждает передачу**; партия остаётся в ожидающем состоянии до внешнего урегулирования. Это сознательное ограничение MVP, не «успешная доставка».
+Частичная **успешная** передача в P0 не поддерживается. Если контейнер отсутствует или отклонён, **второй участник не подтверждает передачу**; создаётся ContainerIssue, партия переходит в DELIVERY_BLOCKED для ручного разрешения. Это не успешная доставка.
 
 ## 4. Приёмка одной пробирки
 
@@ -78,9 +65,9 @@ stateDiagram-v2
 | `MISSING` | Нет | Обязательна | По манифесту должна быть, но не обнаружена |
 | `REJECTED` | Да | Обязательна | Лаборатория отказала в приёмке конкретной пробирки |
 
-Сканирование контейнера только открывает список ожидаемых пробирок; результат по каждой позиции фиксируется отдельно. В `RECEIVING` предлагается разрешить исправление ошибочной отметки до завершения с отдельным audit event `RECEIPT_CORRECTED`; после финализации записи не изменяются. Эта возможность — **предложение для удобства MVP** и требует явного сценария UI/API при реализации.
+Сканирование контейнера только открывает список ожидаемых пробирок; результат по каждой позиции фиксируется отдельно. В `RECEIVING` допускается исправление ошибочной отметки с `receipt_revision` и audit. После финализации прямое изменение запрещено, но **LAB_MANAGER может выполнить reopen** с новой receiving session, после чего изменения снова возможны с полной историей.
 
-Отказ в приёмке пробирки — операционное решение сотрудника, не автоматическая клиническая оценка. Отдельных категорий «повреждена», «температура нарушена», «возвращена» и т. п. в P0 нет. Причины `MISSING`/`REJECTED` — строки в P0 до согласования кодов.
+Отказ в приёмке пробирки — операционное решение сотрудника, не автоматическая клиническая оценка. Отдельных категорий «повреждена», «температура нарушена», «возвращена» и т. п. в P0 нет. Причины `MISSING`/`REJECTED` — обязательные коды из справочника для scope+kind, свободный комментарий необязателен.
 
 ## 5. Блокировки, порядок и изоляция
 
@@ -129,6 +116,12 @@ async def execute_shipment_command(
 | Cancel | Lock shipment; status/cancel_reason/version; audit | Best-effort уведомление |
 
 **Никогда** не подтверждать статус, если запись audit не сохранилась; обе операции должны rollback вместе. Если уведомление отправляется через Celery сразу до commit, worker может увидеть ещё несуществующее состояние: запускать только после успешного commit. Без transactional outbox P0 уведомления best-effort: при падении процесса между commit и публикацией сообщение может быть потеряно. Для критичных интеграций потребуется outbox (P1).
+
+## 6.1. Единый lock-order v0.5
+
+Для **всех** команд, включая Courier sync: auth/shape validation → транзакционное резервирование `Idempotency-Key` (если требуется) → `SELECT FOR UPDATE` на Shipment → child rows → audit + stored response → commit. Не допускаем обратного порядка `Shipment → idempotency` или `child → Shipment`. Ключи, совпадающие у разных параллельных запросов, сериализуются уникальным индексом; изменение ролей проверяется до выдачи кэшированного ответа.
+
+**Manifest triggers:** PostgreSQL сериализует прямую модификацию контейнеров/их состава с seal, блокируя parent Shipment. Версия манифеста `manifest_revision` фиксируется после seal, не равна изменяющемуся `shipment.version`.
 
 ## 7. Idempotency и обработка конфликтов
 
@@ -199,3 +192,7 @@ async def execute_shipment_command(
 - [ ] Утверждён набор причин MISSING/REJECTED и формат меток.
 - [ ] Подготовлены Alembic migrations и проверены на PostgreSQL.
 - [ ] Зафиксированы REST payloads, error codes и OpenAPI.
+
+## 11. Матрица тестов v0.5
+
+Дополнительно к TX-01..18: конкурентное разрешение DELIVERY_BLOCKED, reopen vs повторная финализация, trigger SQL bypass seal, duplicate offline command after network timeout, unauthorized offline client, восстановление PENDING handoff после блокировки. См. [Roadmap v0.5](14-implementation-plan-v05.md), [Offline Protocol](11-offline-sync-protocol.md), [Data Delta](12-data-model-v05.md).

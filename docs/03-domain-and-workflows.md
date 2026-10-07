@@ -1,6 +1,8 @@
 # LabTrack — Domain Model & Workflows
 
-**Версия:** 0.2 (черновик)  
+> **Исторический документ (до v0.6).** Здесь могут встречаться устаревшие правила передачи всей партии, одностороннего разрешения контейнерных проблем и old API paths. Актуальные и приоритетные требования: [Decisions v0.6](15-decisions-v06.md), [Domain v0.6](16-domain-workflows-v06.md), [Data Model v0.6](17-data-model-v06.md), [API v0.6](18-api-v06.md). Не использовать этот документ в одиночку как нормативный контракт.
+
+**Версия:** 0.5 (целевые доменные правила)  
 **Назначение:** согласовать модель и жизненный цикл до SQL-моделей и REST-контрактов.
 
 ## 1. Принятые решения для MVP
@@ -8,8 +10,9 @@
 1. **Каждая физическая пробирка — отдельный `Sample`**, имеющий уникальную метку и индивидуальный результат приёмки.
 2. **Пробирки объединяются в `TransportContainer`** с собственной меткой. Одна партия (`Shipment`) содержит один или несколько контейнеров; контейнер относится к одной партии.
 3. **Каждая передача ответственности подтверждается двумя разными уполномоченными пользователями**: отправитель → курьер и курьер → лаборатория. Подтверждение одной стороны создаёт ожидающую передачу, но не завершает её.
-4. **Исключения при поэкземплярной приёмке ограничены `MISSING` (недостача) и `REJECTED` (отказ в приёмке пробирки)**. Повреждения, температурные нарушения, потери контейнеров, возвраты и повторные перевозки в P0 не моделируем как отдельные процессы.
-5. Подтверждение получения контейнера лабораторией **не означает**, что каждая пробирка в нём принята. Приёмка содержимого выполняется отдельно.
+4. **Категории исключений только `MISSING` и `REJECTED`**, но применяются к пробирке или контейнеру. Контейнерная проблема блокирует всю доставку.
+5. Подтверждение контейнера не означает приёмку пробирок: каждая проверяется отдельно.
+6. LAB_MANAGER может повторно открыть завершённую приёмку с аудитом. Offline Courier queue не меняет сервер до sync.
 
 Под «двухсторонним подтверждением» понимаются аутентифицированные действия в системе, **не** квалифицированная электронная подпись или юридически значимый акт.
 
@@ -26,6 +29,11 @@
 | `TransportContainer` | Физический контейнер внутри партии | `id`, `code`, `shipment_id`, `created_at` |
 | `ContainerItem` | Связь одной пробирки с контейнером и её результат приёмки | `id`, `container_id`, `sample_id`, `receipt_result`, `receipt_reason`, `received_at` |
 | `Handoff` | Два подтверждения передачи ответственности | `id`, `shipment_id`, `kind`, `initiator_user_id`, `receiver_user_id`, `initiated_at`, `confirmed_at`, `status` |
+| `ContainerIssue` | Проблема контейнера MISSING/REJECTED | `id`, `container_id`, `kind`, `reason_code_id`, `status` |
+| `ReceivingSession` | Контроль reopening | `id`, `shipment_id`, `sequence`, `status` |
+| `ReceiptRevision` | Immutable history sample results | `id`, `container_item_id`, `old_result`, `new_result` |
+| `IssueReasonCode` | Code catalog by scope/kind | `id`, `scope`, `kind`, `code` |
+| `SampleExternalReference` | Opaque synthetic LIS reference | `id`, `sample_id`, `system_code`, `external_id` |
 | `ShipmentEvent` | Подтверждённое бизнес-событие | `id`, `shipment_id`, `event_type`, `actor_id`, `occurred_at`, `request_id`, `details` |
 | `AuditEvent` | Техническая история значимых операций | `id`, `actor_id`, `entity_type`, `entity_id`, `action`, `occurred_at`, `request_id`, `details` |
 
@@ -43,7 +51,7 @@
 
 `Shipment` — граница синхронизации: изменения контейнеров, их содержимого, handoff и приёмки сериализуются через блокировку партии или контролируемую проверку версии. Перемещение отдельного `Sample` между контейнерами разрешено только до seal. Переупаковка после seal и повторное использование образца в другой партии — вне MVP.
 
-## 4. State machine: Shipment
+## 4. State machine: Shipment (v0.5)
 
 ```mermaid
 stateDiagram-v2
@@ -51,32 +59,25 @@ stateDiagram-v2
     DRAFT --> READY_FOR_PICKUP: seal
     DRAFT --> CANCELLED: cancel
     READY_FOR_PICKUP --> CANCELLED: cancel
-    READY_FOR_PICKUP --> PICKUP_PENDING: sender confirms release
-    PICKUP_PENDING --> READY_FOR_PICKUP: sender withdraws before pickup
-    PICKUP_PENDING --> IN_TRANSIT: courier confirms pickup
-    IN_TRANSIT --> DELIVERY_PENDING: courier confirms delivery
-    DELIVERY_PENDING --> IN_TRANSIT: courier withdraws before lab confirmation
-    DELIVERY_PENDING --> RECEIVING: lab confirms container handoff
-    RECEIVING --> COMPLETED: all samples accepted
-    RECEIVING --> COMPLETED_WITH_ISSUES: missing or rejected sample
+    READY_FOR_PICKUP --> PICKUP_PENDING: sender confirm-release
+    PICKUP_PENDING --> READY_FOR_PICKUP: sender withdraw
+    PICKUP_PENDING --> IN_TRANSIT: courier confirm-pickup
+    IN_TRANSIT --> DELIVERY_PENDING: courier confirm-delivery
+    DELIVERY_PENDING --> IN_TRANSIT: courier withdraw
+    DELIVERY_PENDING --> RECEIVING: lab confirm-receipt
+    IN_TRANSIT --> DELIVERY_BLOCKED: container issue
+    DELIVERY_PENDING --> DELIVERY_BLOCKED: container issue
+    DELIVERY_BLOCKED --> IN_TRANSIT: regional ops retry
+    DELIVERY_BLOCKED --> CLOSED_UNDELIVERED: regional ops close
+    RECEIVING --> COMPLETED: all accepted
+    RECEIVING --> COMPLETED_WITH_ISSUES: sample discrepancy
+    COMPLETED --> RECEIVING: lab manager reopen
+    COMPLETED_WITH_ISSUES --> RECEIVING: lab manager reopen
 ```
 
-| Команда | Из состояния | В состояние | Кто подтверждает | Условие |
-|---|---|---|---|---|
-| `seal` | `DRAFT` | `READY_FOR_PICKUP` | Sender Operator | Назначен курьер, есть ≥1 контейнер и в каждом ≥1 пробирка; манифест зафиксирован |
-| `confirm_release` | `READY_FOR_PICKUP` | `PICKUP_PENDING` | Sender Operator | Сверены партия и манифест контейнеров |
-| `confirm_pickup` | `PICKUP_PENDING` | `IN_TRANSIT` | Назначенный Courier | Подтверждает тот же манифест; actor отличается от sender |
-| `confirm_delivery` | `IN_TRANSIT` | `DELIVERY_PENDING` | Тот же Courier | Идентификаторы контейнеров сверены |
-| `confirm_container_receipt` | `DELIVERY_PENDING` | `RECEIVING` | Lab Operator лаборатории назначения | Подтверждает передачу контейнеров; actor отличается от courier |
-| `complete_receiving` | `RECEIVING` | `COMPLETED` | Lab Operator | Все пробирки `ACCEPTED` |
-| `complete_receiving` | `RECEIVING` | `COMPLETED_WITH_ISSUES` | Lab Operator | Все пробирки обработаны, есть `MISSING` или `REJECTED` |
-| `withdraw_release` | `PICKUP_PENDING` | `READY_FOR_PICKUP` | Инициатор отправки | До подтверждения курьером; журналируется |
-| `withdraw_delivery` | `DELIVERY_PENDING` | `IN_TRANSIT` | Инициатор доставки | До подтверждения лабораторией; журналируется |
-| `cancel` | `DRAFT` / `READY_FOR_PICKUP` | `CANCELLED` | Sender Operator | Причина обязательна; после подтверждения выдачи отмены нет |
+Каждая передача завершается только после отдельных подтверждений двух разных сотрудников. Если контейнер отсутствует или отклонён, доставка всей партии блокируется, pending Delivery Handoff отзывается и создаётся `ContainerIssue`. При ручном разрешении региональный ответственный выбирает RETRY_DELIVERY или CLOSE_UNDELIVERED; детские результаты пробирок не меняются автоматически.
 
-После `seal` нельзя менять манифест партии: перечень контейнеров, распределение и состав пробирок. Незавершённый `Handoff` **не** подтверждает переход ответственности. Подтверждения хранят actor и точное время; повторные или конфликтующие подтверждения не создают вторую передачу.
-
-Отзыв первой стороны — штатное управление незавершённым подтверждением, а не логистическое исключение. После закрытия партии изменения результатов запрещены; административное исправление или повторный рейс — вне MVP.
+LAB_MANAGER может повторно открыть завершённую приёмку с причиной, новой receiving session и append-only revisions. Состав запечатанного контейнера неизменяем. До успешной синхронизации Offline Courier действие считается только локально ожидающим.
 
 ## 5. Результаты приёмки каждой пробирки
 
@@ -108,25 +109,30 @@ stateDiagram-v2
 
 Для команд изменения состава, `seal`, подтверждений и приёмки используем блокировку `shipments` через `SELECT ... FOR UPDATE` либо согласованную CAS-стратегию с `version`. Подтверждение и связанный `ShipmentEvent` сохраняются атомарно. `Idempotency-Key` уникален в scope actor + operation и привязан к хэшу payload; retry не создаёт вторых событий. Асинхронные уведомления не меняют состояние партии.
 
-## 7. Два исключения P0
+## 7. Два вида исключений P0 — два уровня
 
-| Исключение | Условие | Операция | Итог |
-|---|---|---|---|
-| **Недостача** (`MISSING`) | Пробирка указана в манифесте, но её нет при проверке контейнера | Lab Operator указывает конкретный `ContainerItem` и причину | `COMPLETED_WITH_ISSUES` после обработки всех позиций |
-| **Отказ в приёмке** (`REJECTED`) | Пробирка предъявлена лаборатории, но не принимается | Lab Operator указывает конкретный `ContainerItem` и причину | `COMPLETED_WITH_ISSUES` после обработки всех позиций |
+| Kind | Target | Результат |
+|---|---|---|
+| MISSING | SAMPLE | Пробирка не найдена при receiving |
+| REJECTED | SAMPLE | Лаборатория отказала в приёмке предъявленной пробирки |
+| MISSING | CONTAINER | Контейнер отсутствует, вся доставка DELIVERY_BLOCKED |
+| REJECTED | CONTAINER | Контейнер отклонён лабораторией, вся доставка DELIVERY_BLOCKED |
 
-Повторное подтверждение, ошибки доступа и конфликты версий — ошибки/защитные механизмы API, не отдельные типы инцидентов. Повреждение, температурное нарушение, задержка как самостоятельный инцидент, отказ от всего контейнера, возврат и повторная перевозка остаются вне P0. Плановую просрочку можно отображать как вычисляемый показатель, без заведения третьего типа исключения.
+Для исключений нужен `reason_code` из справочника с подходящим scope+kind; комментарий необязателен. Отказ в целом контейнере не устанавливает результат пробирок и не приводит к успешной частичной передаче.
 
-## 8. Неутверждённые вопросы
+## 8. Открытые операционные вопросы
 
-- Кто назначает курьера: отправитель или диспетчер?
-- Какой перечень кодов причин `MISSING` / `REJECTED` нужен для демо?
-- Разрешать ли нескольким Lab Operator одновременно отмечать позиции (при сериализации по партии)?
-- Какие справочники материалов и сроки перевозки нужны без моделирования медицинских нормативов?
+- Фактическая ответственность за заблокированный/отклонённый контейнер до ручного разрешения.
+- Максимальная длительность offline очереди до операционного review.
+- Конкретный каталог причин, типы внешних LIS ссылок и юридическая семантика времени offline-событий.
+- Нужен ли срок, после которого reopening приёмки уже запрещено.
 
-Выбранные решения и их последствия зафиксированы также в [Decision Log](05-design-decisions.md).
+Назначение Courier — Sender в DRAFT; в пилоте одна центральная Lab. См. [v0.5 Decision Register](10-domain-hardening-v05.md).
 
 ## Следующий уровень спецификации
 
 - [PostgreSQL Data Model & ERD](06-data-model.md) — физические таблицы и гарантии БД.
 - [Workflows, Transactions & Concurrency](07-transactions-and-concurrency.md) — команды, транзакционные границы, блокировки, idempotency и тестовая матрица.
+
+- [DB Delta v0.5](12-data-model-v05.md) — новые поля, triggers, receiving revisions.
+- [Offline Courier](11-offline-sync-protocol.md) — синхронизация pending команд.
