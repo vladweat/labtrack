@@ -1,0 +1,21 @@
+# codex-workflow-managed-start
+.codex_workflow_hidden_resources/
+# codex-workflow-managed-end
+
+# Local development credentials
+.env
+.env.*
+!.env.example
+
+# Python development artifacts
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/

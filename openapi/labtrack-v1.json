@@ -3,7 +3,7 @@
   "info": {
     "title": "LabTrack REST API",
     "version": "0.6.1-draft",
-    "description": "LabTrack v0.6.1: FINAL APPROVED PRODUCT REQUIREMENTS for synthetic-only portfolio MVP (all 19 answers and OPEN-01–04 approved on 2026-11-01). OpenAPI remains design draft until runtime implementation/contract validation. Exceptional custody uses 2 distinct eligible destination-lab witnesses (one LAB_MANAGER), confirmed Shipment Pickup and separate regional administrative decision; no forged Courier handoff. No backend implementation."
+    "description": "LabTrack v0.6.1: FINAL APPROVED PRODUCT REQUIREMENTS for the synthetic MVP (all 19 answers and OPEN-01–04 approved on 2026-11-01). OpenAPI remains design draft until runtime implementation/contract validation. Exceptional custody uses 2 distinct eligible destination-lab witnesses (one LAB_MANAGER), confirmed Shipment Pickup and separate regional administrative decision; no forged Courier handoff. No domain API implementation."
   },
   "servers": [
     {

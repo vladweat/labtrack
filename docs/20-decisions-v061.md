@@ -1,6 +1,6 @@
 # LabTrack v0.6.1 — Decision Register (Specification Hardening)
 
-**Status: APPROVED / FROZEN for the synthetic portfolio MVP (2026-11-01).** All 19 hardening answers and OPEN-01–04 have explicit user approval. Design only: no backend, migrations or tests implemented. Approved requirements override conflicting v0.6 assumptions. Real-world compliance remains out of scope.
+**Status: APPROVED / FROZEN for the synthetic MVP (2026-11-01).** All 19 hardening answers and OPEN-01–04 have explicit user approval. Design only: no backend, migrations or tests implemented. Approved requirements override conflicting v0.6 assumptions. Real-world compliance remains out of scope.
 
 ## 1. Approved — Chain of custody (P0)
 
@@ -67,7 +67,7 @@ Server-issued snapshot timestamp is **not forensic proof of the physical action 
 
 ## 6. Final approvals — OPEN-01–04 are **CLOSED / APPROVED**
 
-The user explicitly approved all four recommendations on 2026-11-01. No additional product vote is required for the synthetic portfolio MVP.
+The user explicitly approved all four recommendations on 2026-11-01. No additional product vote is required for the synthetic MVP.
 
 | Decision | Final approved rule |
 |---|---|
@@ -90,7 +90,7 @@ These mechanics specify how the approved separation of roles is implemented; the
 
 Real medical regulation, formal custody evidence, retention/privacy, and clinical compliance require expert sign-off **before real deployment**. They are not requirements for the synthetic-only MVP.
 
-**Specification gate:** OPEN-01–04 are resolved; exceptional and offline workflows are now **approved for implementation** (subject to ordinary code review, real PostgreSQL tests, authorization enforcement, audit and security tests). There are no remaining product-approval blockers for portfolio MVP.
+**Specification gate:** OPEN-01–04 are resolved; exceptional and offline workflows are now **approved for implementation** (subject to ordinary code review, real PostgreSQL tests, authorization enforcement, audit and security tests). There are no remaining product-approval blockers for the MVP.
 
 ## 7. Canonical v0.6.1 follow-ups
 

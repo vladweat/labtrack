@@ -1,7 +1,7 @@
 # LabTrack — медицинская логистика, архитектура и API
 
-**Текущая спецификация:** **LabTrack v0.6.1 — APPROVED / FROZEN для портфолио-MVP** (19 решений hardening + все OPEN-01–04 утверждены 2026-11-01; машинный OpenAPI остаётся draft до проверки с работающим FastAPI; backend и migrations ещё не реализованы).  
-**Цель:** production-like портфолио-MVP на синтетических данных, без реального медицинского документооборота.
+**Текущая спецификация:** **LabTrack v0.6.1 — APPROVED / FROZEN для MVP** (19 решений hardening + все OPEN-01–04 утверждены 2026-11-01; машинный OpenAPI остаётся draft до проверки с API бизнес-сценариями; подготовлен только backend scaffold, миграции ещё не реализованы).
+**Цель:** production-like MVP на синтетических данных, без реального медицинского документооборота.
 
 LabTrack — система прослеживаемости передачи лабораторных пробирок в маркированных контейнерах от медицинских учреждений через курьеров в одну центральную лабораторию пилотного региона.
 
@@ -41,7 +41,33 @@ LabTrack — система прослеживаемости передачи л
 
 ## Статус и границы
 
-**На сегодня есть:** согласованные 19 решений hardening, утверждённая модель exceptional receipt и role matrix, design-level PostgreSQL, OpenAPI v0.6.1 draft, тестовая матрица.  
-**Ещё нет:** FastAPI endpoints, SQLAlchemy/Alembic, PostgreSQL triggers, offline PWA, Docker окружения, CI или результатов выполнения тестов.
+**На сегодня есть:** согласованные 19 решений hardening, утверждённая модель exceptional receipt и role matrix, design-level PostgreSQL, OpenAPI v0.6.1 draft, тестовая матрица, локальная Compose-конфигурация PostgreSQL/Redis и минимальный FastAPI scaffold с `/health/live`.
+**Ещё нет:** бизнес-endpoints, SQLAlchemy metadata/session и Alembic runtime/revisions, PostgreSQL triggers, Celery tasks, offline PWA, CI и результатов выполнения тестов.
 
 Все данные демонстрационные. Непрозрачные ссылки на ЛИС не гарантируют анонимность в реальном окружении. Перед реальным пилотом нужно отдельно подтвердить юридическую ответственность за физический контейнер, правила offline-разрешения, регламенты медицинской логистики, хранение данных, безопасность и процедуры восстановления.
+
+## Локальное инфраструктурное окружение
+
+В Compose настроены только PostgreSQL и Redis для будущей разработки backend. Доменные endpoints и Celery worker пока не реализованы. Используются локальные образы `postgres:15` и `redis:7`; если какого-либо образа нет, запуск завершится ошибкой и не будет скачивать его.
+
+```bash
+cp .env.example .env
+docker compose up -d
+docker compose ps
+```
+
+PostgreSQL и Redis доступны только с локальной машины на `localhost:5432` и `localhost:6379`. Порты можно изменить в `.env`. PostgreSQL хранит данные в отдельном Docker volume `labtrack_dev_postgres_data`; Redis работает без постоянного хранилища.
+
+Redis предусмотрен как broker/cache для будущих best-effort задач Celery и не является источником истины для бизнес-состояния.
+
+Остановить сервисы, сохранив данные PostgreSQL:
+
+```bash
+docker compose down
+```
+
+В конфигурации нет команды миграции: её добавим вместе с backend. Локальный `.env` содержит только параметры разработки и исключён из Git.
+
+## Backend scaffold
+
+В `backend/` подготовлены модульная структура FastAPI, `pyproject.toml`, места для миграций и тестов, а также только liveness endpoint. Версия Python для проекта — 3.12. Чтобы создать виртуальное окружение и установить зависимости, см. [backend/README.md](backend/README.md). Основные сценарии LabTrack пока не реализованы.

@@ -1,0 +1,1 @@
+"""LabTrack backend application package."""
