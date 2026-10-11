@@ -1,6 +1,6 @@
 # LabTrack v0.6.1 — Decision Register (Specification Hardening)
 
-**Status: APPROVED / FROZEN for the synthetic MVP (2026-11-01).** All 19 hardening answers and OPEN-01–04 have explicit user approval. Design only: no backend, migrations or tests implemented. Approved requirements override conflicting v0.6 assumptions. Real-world compliance remains out of scope.
+**Status: APPROVED / FROZEN for the synthetic MVP (2026-11-01).** All 19 hardening answers and OPEN-01–04 have explicit user approval. At the time this decision register was written, no backend, migrations or tests had been implemented. Approved requirements override conflicting v0.6 assumptions. Real-world compliance remains out of scope.
 
 ## 1. Approved — Chain of custody (P0)
 

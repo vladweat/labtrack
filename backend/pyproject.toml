@@ -5,13 +5,15 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "labtrack-backend"
 version = "0.1.0"
-description = "FastAPI backend scaffold for the LabTrack synthetic MVP"
+description = "FastAPI backend for the LabTrack synthetic MVP"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "alembic>=1.14,<2",
     "asyncpg>=0.30,<1",
+    "argon2-cffi>=23.1,<26",
     "celery[redis]>=5.4,<6",
     "fastapi>=0.115,<1",
+    "PyJWT>=2.10,<3",
     "pydantic-settings>=2.7,<3",
     "sqlalchemy[asyncio]>=2.0,<3",
     "uvicorn[standard]>=0.34,<1",
@@ -40,3 +42,6 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.format]
+quote-style = "double"

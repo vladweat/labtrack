@@ -1,6 +1,6 @@
 # LabTrack — медицинская логистика, архитектура и API
 
-**Текущая спецификация:** **LabTrack v0.6.1 — APPROVED / FROZEN для MVP** (19 решений hardening + все OPEN-01–04 утверждены 2026-11-01; машинный OpenAPI остаётся draft до проверки с API бизнес-сценариями; подготовлен только backend scaffold, миграции ещё не реализованы).
+**Текущая спецификация:** **LabTrack v0.6.1 — APPROVED / FROZEN для MVP** (19 решений hardening + все OPEN-01–04 утверждены 2026-11-01; машинный OpenAPI остаётся draft до проверки с API бизнес-сценариями).
 **Цель:** production-like MVP на синтетических данных, без реального медицинского документооборота.
 
 LabTrack — система прослеживаемости передачи лабораторных пробирок в маркированных контейнерах от медицинских учреждений через курьеров в одну центральную лабораторию пилотного региона.
@@ -41,8 +41,8 @@ LabTrack — система прослеживаемости передачи л
 
 ## Статус и границы
 
-**На сегодня есть:** согласованные 19 решений hardening, утверждённая модель exceptional receipt и role matrix, design-level PostgreSQL, OpenAPI v0.6.1 draft, тестовая матрица, локальная Compose-конфигурация PostgreSQL/Redis и минимальный FastAPI scaffold с `/health/live`.
-**Ещё нет:** бизнес-endpoints, SQLAlchemy metadata/session и Alembic runtime/revisions, PostgreSQL triggers, Celery tasks, offline PWA, CI и результатов выполнения тестов.
+**Реализовано в Foundation:** typed runtime settings, async SQLAlchemy session, первая Alembic-миграция identity/scope, login с Argon2id и коротким identity-only JWT, проверка текущих active memberships, `/health/live`, `/health/ready`, JSON request-correlated logs и CI для миграции на PostgreSQL 15.
+**Ещё нет:** бизнес-endpoints партий и передачи, CRUD/provisioning пользователей и memberships, PostgreSQL custody triggers, Celery tasks, offline PWA, тестовая реализация и результаты выполнения тестов.
 
 Все данные демонстрационные. Непрозрачные ссылки на ЛИС не гарантируют анонимность в реальном окружении. Перед реальным пилотом нужно отдельно подтвердить юридическую ответственность за физический контейнер, правила offline-разрешения, регламенты медицинской логистики, хранение данных, безопасность и процедуры восстановления.
 
@@ -66,8 +66,8 @@ Redis предусмотрен как broker/cache для будущих best-ef
 docker compose down
 ```
 
-В конфигурации нет команды миграции: её добавим вместе с backend. Локальный `.env` содержит только параметры разработки и исключён из Git.
+Миграции применяются отдельно из `backend/` командой `alembic upgrade head`. Локальный `.env` содержит только параметры разработки и исключён из Git.
 
 ## Backend scaffold
 
-В `backend/` подготовлены модульная структура FastAPI, `pyproject.toml`, места для миграций и тестов, а также только liveness endpoint. Версия Python для проекта — 3.12. Чтобы создать виртуальное окружение и установить зависимости, см. [backend/README.md](backend/README.md). Основные сценарии LabTrack пока не реализованы.
+В `backend/` подготовлена модульная структура FastAPI и база identity/access-control Foundation. Версия Python для проекта — 3.12. Установка, миграция и запуск описаны в [backend/README.md](backend/README.md). Основные сценарии LabTrack пока не реализованы.

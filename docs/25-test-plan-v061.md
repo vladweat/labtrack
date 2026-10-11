@@ -1,6 +1,6 @@
 # LabTrack v0.6.1 — Verification, Test Matrix & Implementation Gates
 
-**Scope:** requirement-level plan only. No tests executed and no application code exists. Start from [v0.6 plan](19-roadmap-v06.md) and hardening decisions [20](20-decisions-v061.md). Use **real PostgreSQL** for locks, triggers, partial indexes and migration testing.
+**Scope:** requirement-level verification plan. No automated tests have been executed. The initial Foundation now includes identity/scope persistence, migrations, authentication primitives and health endpoints; later workflow requirements remain unimplemented. Start from [v0.6 plan](19-roadmap-v06.md) and hardening decisions [20](20-decisions-v061.md). Use **real PostgreSQL** for locks, triggers, partial indexes and migration testing.
 
 ## 1. P0 — Chain of custody
 
