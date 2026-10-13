@@ -17,13 +17,13 @@ jobs:
       postgres:
         image: postgres:15
         env:
-          POSTGRES_DB: labtrack
+          POSTGRES_DB: labtrack_test
           POSTGRES_USER: labtrack
           POSTGRES_PASSWORD: ci-only-password
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U labtrack -d labtrack"
+          --health-cmd "pg_isready -U labtrack -d labtrack_test"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -31,8 +31,9 @@ jobs:
       run:
         working-directory: backend
     env:
-      APP_ENV: development
-      POSTGRES_DB: labtrack
+      APP_ENV: test
+      LABTRACK_TESTING: "1"
+      POSTGRES_DB: labtrack_test
       POSTGRES_USER: labtrack
       POSTGRES_PASSWORD: ci-only-password
       POSTGRES_HOST: 127.0.0.1
@@ -46,5 +47,10 @@ jobs:
           cache-dependency-path: backend/pyproject.toml
       - run: python -m pip install -e ".[dev]"
       - run: ruff check .
+      - run: ruff format --check .
       - run: python -m compileall -q app alembic
       - run: alembic upgrade head
+      - run: alembic check
+      - run: alembic downgrade base
+      - run: alembic upgrade head
+      - run: pytest -q

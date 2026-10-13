@@ -41,8 +41,8 @@ LabTrack — система прослеживаемости передачи л
 
 ## Статус и границы
 
-**Реализовано в Foundation:** typed runtime settings, async SQLAlchemy session, первая Alembic-миграция identity/scope, login с Argon2id и коротким identity-only JWT, проверка текущих active memberships, `/health/live`, `/health/ready`, JSON request-correlated logs и CI для миграции на PostgreSQL 15.
-**Ещё нет:** бизнес-endpoints партий и передачи, CRUD/provisioning пользователей и memberships, PostgreSQL custody triggers, Celery tasks, offline PWA, тестовая реализация и результаты выполнения тестов.
+**Foundation / Stage A завершён:** typed runtime settings, async SQLAlchemy session, identity/scope schema, явный Alembic migration с проверкой drift, login с Argon2id и коротким identity-only JWT, проверка active memberships и scoped RBAC, `/health/live`, `/health/ready`, JSON request-correlated logs. 23 теста проходят на PostgreSQL 15; CI проверяет lint/format, миграцию upgrade/check/downgrade/upgrade и pytest.
+**Следующие этапы:** бизнес-endpoints партий и передачи, provisioning пользователей и memberships, PostgreSQL custody triggers, Celery tasks, offline PWA и dashboards.
 
 Все данные демонстрационные. Непрозрачные ссылки на ЛИС не гарантируют анонимность в реальном окружении. Перед реальным пилотом нужно отдельно подтвердить юридическую ответственность за физический контейнер, правила offline-разрешения, регламенты медицинской логистики, хранение данных, безопасность и процедуры восстановления.
 
@@ -51,7 +51,7 @@ LabTrack — система прослеживаемости передачи л
 В Compose настроены только PostgreSQL и Redis для будущей разработки backend. Доменные endpoints и Celery worker пока не реализованы. Используются локальные образы `postgres:15` и `redis:7`; если какого-либо образа нет, запуск завершится ошибкой и не будет скачивать его.
 
 ```bash
-cp .env.example .env
+test -f .env || cp .env.example .env
 docker compose up -d
 docker compose ps
 ```

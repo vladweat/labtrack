@@ -65,6 +65,7 @@ class Membership(Base):
             "(organization_id IS NULL AND region_id IS NOT NULL)",
             name="exactly_one_scope",
         ),
+        Index("ix_memberships_user_id", "user_id"),
         Index(
             "uq_membership_org_grant",
             "user_id",

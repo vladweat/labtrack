@@ -14,7 +14,7 @@ Create the local environment file from the repository root if it does not exist,
 
 ```bash
 cd ..
-cp .env.example .env
+test -f .env || cp .env.example .env
 docker compose up -d postgres
 cd backend
 ```
@@ -35,4 +35,13 @@ The liveness endpoint is `http://127.0.0.1:8000/health/live`; readiness is `http
 
 JWT roles are not embedded in tokens. Protected use cases must use `Principal`/`require_roles` and verify the active organization or region scope against the target resource. A role match by itself is not an ownership check. Redis is not required for readiness or authentication.
 
-Run static checks with `ruff check .` and `python -m compileall -q app alembic`. Tests are planned but no test suite is present yet. CI currently checks formatting/lintability, Python compilation, and a real PostgreSQL migration upgrade.
+Run static checks with `ruff check .`, `ruff format --check .`, and `python -m compileall -q app alembic tests`. The pytest suite covers credentials/JWT, active and revoked accounts/memberships, scoped organization/region authorization, health behavior, and migration state.
+
+Prepare a dedicated test database; the suite truncates identity/scope tables before each test and refuses to run without an explicit test-database name and opt-in flag:
+
+```bash
+docker compose exec -T postgres createdb -U labtrack labtrack_test
+LABTRACK_TESTING=1 POSTGRES_DB=labtrack_test pytest -q
+```
+
+The CI job checks Ruff lint and format, Python compilation, migration upgrade/drift/downgrade/upgrade, and the full pytest suite against PostgreSQL 15.

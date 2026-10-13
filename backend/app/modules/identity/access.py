@@ -2,11 +2,11 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -97,14 +97,80 @@ async def get_current_principal(
     return Principal(user.id, user.email, user.display_name, tuple(grants))
 
 
-def require_roles(*roles: str) -> Callable[..., Principal]:
-    """Require one current role; resource ownership and exact scope remain use-case checks."""
+def require_roles(
+    *roles: str,
+    organization_id_param: str | None = None,
+    region_id_param: str | None = None,
+) -> Callable[..., Principal]:
+    """Require a current role, optionally bound to a UUID path scope.
+
+    Resource ownership and state-dependent authorization remain use-case checks.
+    """
+
+    if organization_id_param is not None and region_id_param is not None:
+        raise ValueError("Choose one authorization scope path parameter")
+    scope_parameter = organization_id_param or region_id_param
 
     async def dependency(
+        request: Request,
         principal: Annotated[Principal, Depends(get_current_principal)],
     ) -> Principal:
-        if not any(principal.has_role(role) for role in roles):
+        if scope_parameter is None:
+            authorized = any(principal.has_role(role) for role in roles)
+        else:
+            raw_scope_id = request.path_params.get(scope_parameter)
+            try:
+                scope_id = UUID(str(raw_scope_id))
+            except (ValueError, TypeError, AttributeError):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Resource not found",
+                ) from None
+            authorized = any(
+                principal.has_role(
+                    role,
+                    organization_id=scope_id if organization_id_param is not None else None,
+                    region_id=scope_id if region_id_param is not None else None,
+                )
+                for role in roles
+            )
+        if not authorized:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient role")
+        return principal
+
+    return dependency
+
+
+def require_scoped_role(
+    role: str,
+    *,
+    scope_parameter: Literal["organization_id", "region_id"],
+) -> Callable[..., Principal]:
+    """Require a role grant scoped to a path UUID; mask foreign scopes with 404."""
+
+    async def dependency(
+        request: Request,
+        principal: Annotated[Principal, Depends(get_current_principal)],
+    ) -> Principal:
+        raw_scope_id = request.path_params.get(scope_parameter)
+        try:
+            scope_id = UUID(str(raw_scope_id))
+        except (ValueError, TypeError, AttributeError):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Resource not found",
+            ) from None
+
+        authorized = (
+            principal.has_role(role, organization_id=scope_id)
+            if scope_parameter == "organization_id"
+            else principal.has_role(role, region_id=scope_id)
+        )
+        if not authorized:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Resource not found",
+            )
         return principal
 
     return dependency

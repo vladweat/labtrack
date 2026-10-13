@@ -57,7 +57,7 @@ async def health_ready() -> JSONResponse | dict[str, str]:
     try:
         async with get_engine().connect() as connection:
             await connection.execute(text("SELECT 1"))
-    except SQLAlchemyError:
+    except (SQLAlchemyError, OSError):
         logger.exception("database readiness probe failed")
         return JSONResponse(status_code=503, content={"status": "unavailable"})
     return {"status": "ok"}
