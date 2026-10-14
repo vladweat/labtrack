@@ -9,14 +9,20 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from alembic import context
 from app.core.config import get_settings
 from app.db.base import Base
+from app.modules.audit import models as audit_models  # noqa: F401
+from app.modules.idempotency import models as idempotency_models  # noqa: F401
 from app.modules.identity import models as identity_models  # noqa: F401
+from app.modules.organizations import models as organization_models  # noqa: F401
+from app.modules.samples import models as sample_models  # noqa: F401
+from app.modules.shipments import models as shipment_models  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 config.set_main_option(
-    "sqlalchemy.url", get_settings().database_url.render_as_string(False).replace("%", "%%")
+    "sqlalchemy.url",
+    get_settings().migration_database_url.render_as_string(False).replace("%", "%%"),
 )
 target_metadata = Base.metadata
 

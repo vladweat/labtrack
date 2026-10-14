@@ -26,12 +26,15 @@ class Settings(BaseSettings):
     postgres_db: str = "labtrack"
     postgres_user: str = "labtrack"
     postgres_password: SecretStr = SecretStr("labtrack-local-only-change-me")
+    app_postgres_user: str = "labtrack_app"
+    app_postgres_password: SecretStr = SecretStr("labtrack-local-only-change-me")
     postgres_host: str = "127.0.0.1"
     postgres_port: int = 5432
     jwt_secret_key: SecretStr = SecretStr(DEVELOPMENT_JWT_SECRET)
     jwt_issuer: str = "labtrack-api"
     jwt_audience: str = "labtrack-client"
     jwt_access_token_minutes: int = 15
+    destination_organization_code: str = "CENTRAL_LAB"
     log_level: str = "INFO"
 
     @model_validator(mode="after")
@@ -48,6 +51,18 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> URL:
+        return URL.create(
+            "postgresql+asyncpg",
+            username=self.app_postgres_user,
+            password=self.app_postgres_password.get_secret_value(),
+            host=self.postgres_host,
+            port=self.postgres_port,
+            database=self.postgres_db,
+        )
+
+    @property
+    def migration_database_url(self) -> URL:
+        """Database owner connection used only for migrations and test cleanup."""
         return URL.create(
             "postgresql+asyncpg",
             username=self.postgres_user,

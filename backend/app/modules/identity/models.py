@@ -10,11 +10,12 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     String,
+    UniqueConstraint,
     Uuid,
     func,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from app.db.base import Base
 
@@ -31,6 +32,13 @@ class Region(Base):
 
 class Organization(Base):
     __tablename__ = "organizations"
+    __table_args__ = (
+        UniqueConstraint("id", "region_id", name="uq_organizations_id_region"),
+        CheckConstraint(
+            "kind IN ('HEALTHCARE_FACILITY', 'LABORATORY', 'LOGISTICS')",
+            name="valid_organization_kind",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     region_id: Mapped[UUID] = mapped_column(
@@ -38,7 +46,8 @@ class Organization(Base):
     )
     code: Mapped[str] = mapped_column(String(48), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
-    organization_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    organization_type: Mapped[str] = mapped_column("kind", String(24), nullable=False)
+    kind = synonym("organization_type")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     region: Mapped[Region] = relationship(back_populates="organizations")
