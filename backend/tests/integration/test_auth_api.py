@@ -22,7 +22,7 @@ async def create_active_member(
             region=region,
             code=f"O-{uuid4().hex[:8]}",
             name="Test laboratory",
-            organization_type="LAB",
+            organization_type="LABORATORY",
         )
         user = User(
             email=email,
@@ -148,4 +148,4 @@ async def test_database_migration_revision_is_applied(database_sessions) -> None
     async with database_sessions() as session:
         revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
 
-    assert revision == "0001_foundation_identity"
+    assert revision == "0002_manifest"

@@ -13,10 +13,11 @@ from app.main import app
 async def database_sessions() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     engine = create_async_engine(get_settings().database_url, pool_pre_ping=True)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
-    async with engine.begin() as connection:
-        await connection.execute(
-            text("TRUNCATE TABLE memberships, users, organizations, regions CASCADE")
-        )
+    cleanup_engine = create_async_engine(get_settings().migration_database_url)
+    async with cleanup_engine.begin() as connection:
+        await connection.execute(text("TRUNCATE TABLE users CASCADE"))
+        await connection.execute(text("DELETE FROM organizations WHERE code <> 'CENTRAL_LAB'"))
+        await connection.execute(text("DELETE FROM regions WHERE code <> 'PILOT'"))
 
     async def override_db_session() -> AsyncIterator[AsyncSession]:
         async with sessions() as session:
@@ -28,3 +29,4 @@ async def database_sessions() -> AsyncIterator[async_sessionmaker[AsyncSession]]
     finally:
         app.dependency_overrides.pop(get_db_session, None)
         await engine.dispose()
+        await cleanup_engine.dispose()

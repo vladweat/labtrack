@@ -51,7 +51,7 @@ async def create_member(
             region=region,
             code=f"O-{email[:8]}",
             name="Test laboratory",
-            organization_type="LAB",
+            organization_type="LABORATORY",
             is_active=organization_active,
         )
         user = User(

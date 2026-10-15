@@ -5,6 +5,7 @@ import os
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core.config import get_settings
 from app.db.session import get_engine
@@ -20,20 +21,21 @@ def require_disposable_postgres_database() -> None:
     if settings.database_url.get_backend_name() != "postgresql":
         pytest.exit("Foundation integration tests require PostgreSQL.")
     if "test" not in (settings.postgres_db or "").casefold():
-        pytest.exit("POSTGRES_DB must include 'test'; tests truncate all Foundation tables.")
+        pytest.exit("POSTGRES_DB must include 'test'; tests clear the disposable database.")
 
 
 @pytest_asyncio.fixture(autouse=True)
 async def clean_foundation_tables():
     """Isolate each test by clearing rows from the dedicated test database."""
 
-    engine = get_engine()
+    engine = create_async_engine(get_settings().migration_database_url)
     try:
         async with engine.begin() as connection:
-            await connection.execute(
-                text("TRUNCATE TABLE memberships, users, organizations, regions CASCADE")
-            )
+            await connection.execute(text("TRUNCATE TABLE users CASCADE"))
+            await connection.execute(text("DELETE FROM organizations WHERE code <> 'CENTRAL_LAB'"))
+            await connection.execute(text("DELETE FROM regions WHERE code <> 'PILOT'"))
         yield
     finally:
-        # pytest-asyncio uses a per-test loop; discard asyncpg connections before it closes.
         await engine.dispose()
+        # pytest-asyncio uses a per-test loop; discard asyncpg connections before it closes.
+        await get_engine().dispose()
