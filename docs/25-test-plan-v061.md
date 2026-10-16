@@ -1,6 +1,6 @@
 # LabTrack v0.6.1 — Verification, Test Matrix & Implementation Gates
 
-**Scope:** requirement-level verification plan and implementation gates. Foundation/Stage A tests cover identity/scope, authentication, authorization, health/readiness and migration state; 23 tests currently pass against PostgreSQL 15. Later business-workflow requirements remain unimplemented. Start from [v0.6 plan](19-roadmap-v06.md) and hardening decisions [20](20-decisions-v061.md). Use **real PostgreSQL** for locks, triggers, partial indexes and migration testing.
+**Scope:** requirement-level verification plan and implementation gates. Foundation and Manifest/Stage B are implemented with real PostgreSQL migrations and integration tests; later custody, receiving, offline, and analytics workflows remain unimplemented. Start from [v0.6 plan](19-roadmap-v06.md) and hardening decisions [20](20-decisions-v061.md). Use **real PostgreSQL** for locks, triggers, partial indexes and migration testing.
 
 ## 1. P0 — Chain of custody
 
@@ -68,6 +68,7 @@
 - Auth: Argon2id, short-lived JWT, per-use-case active RBAC and tenant/region scope, IDOR masked 404 when appropriate, tests for region analyst aggregate-only.
 - DB: each state mutation + audit + revisions + idempotency response shares one PostgreSQL transaction; no partial effects upon audit failure.
 - Triggers: DB owner/runtime roles distinct; direct SQL bypass test; test SQLSTATE 40P01 retry without double commit.
+- Stage B acceptance: Sample/external-reference scope; optional draft deadline; configured destination validation; courier region membership; one-to-many containers; duplicate Sample exclusion; same-key replay and changed-body conflict; six reason-code labels; seal deadline/state; direct SQL immutability and runtime non-owner privilege checks.
 - API: OpenAPI JSON schema validation and contract tests comparing FastAPI runtime-generated specification to agreed design; explicit 409/422/403/404 cases.
 - Offline: no access tokens in IndexedDB, queue survives refresh, per-account logout purge, per-command ack persisted before queue removal.
 - Operations: container event history reconstructs who asserted custody and via which evidence method; never confuse EXCEPTIONAL with normal Courier confirmation.
@@ -81,6 +82,6 @@
 
 **Offline Ready for Implementation:** OPEN-04 is **APPROVED**: manifest revision, target Container/Handoff version, Pickup phase and active authorization are relevant; unrelated Shipment bookkeeping alone is not. 24h snapshot guard, 90d replay, tombstones and two-device conflicts remain required tests.
 
-**Implementation Done:** actual migrations, working FastAPI routes, tests passing on real PostgreSQL, runtime OpenAPI contract checks, offline client, operational dashboards, CI/observability. Documentation does **not** assert these are present.
+**Stage B implemented:** migrations and core FastAPI routes run against PostgreSQL; tests cover the primary sample-to-sealed-manifest flow, idempotent replay, and database trigger protection. The wider v0.6.1 OpenAPI contract, offline client, operational dashboards, and later custody/receiving workflows are not complete.
 
 **Scope control:** no new third Sample/Container discrepancy type, no phantom witness signatures, no retrospective custody acceptance from stale commands, no Courier reassignment after seal.

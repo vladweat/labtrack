@@ -1,4 +1,4 @@
-name: Backend foundation
+name: Backend checks
 
 on:
   push:
@@ -36,6 +36,8 @@ jobs:
       POSTGRES_DB: labtrack_test
       POSTGRES_USER: labtrack
       POSTGRES_PASSWORD: ci-only-password
+      APP_POSTGRES_USER: labtrack_app
+      APP_POSTGRES_PASSWORD: ci-app-only-password
       POSTGRES_HOST: 127.0.0.1
       POSTGRES_PORT: 5432
     steps:
@@ -46,6 +48,18 @@ jobs:
           cache: pip
           cache-dependency-path: backend/pyproject.toml
       - run: python -m pip install -e ".[dev]"
+      - name: Create restricted runtime database role
+        run: |
+          PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -d "$POSTGRES_DB" <<'SQL'
+          CREATE ROLE labtrack_app LOGIN PASSWORD 'ci-app-only-password';
+          GRANT CONNECT ON DATABASE labtrack_test TO labtrack_app;
+          GRANT USAGE ON SCHEMA public TO labtrack_app;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO labtrack_app;
+          ALTER DEFAULT PRIVILEGES FOR ROLE labtrack IN SCHEMA public
+            GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO labtrack_app;
+          ALTER DEFAULT PRIVILEGES FOR ROLE labtrack IN SCHEMA public
+            GRANT USAGE, SELECT ON SEQUENCES TO labtrack_app;
+          SQL
       - run: ruff check .
       - run: ruff format --check .
       - run: python -m compileall -q app alembic

@@ -41,14 +41,14 @@ LabTrack — система прослеживаемости передачи л
 
 ## Статус и границы
 
-**Foundation / Stage A завершён:** typed runtime settings, async SQLAlchemy session, identity/scope schema, явный Alembic migration с проверкой drift, login с Argon2id и коротким identity-only JWT, проверка active memberships и scoped RBAC, `/health/live`, `/health/ready`, JSON request-correlated logs. 23 теста проходят на PostgreSQL 15; CI проверяет lint/format, миграцию upgrade/check/downgrade/upgrade и pytest.
-**Следующие этапы:** бизнес-endpoints партий и передачи, provisioning пользователей и memberships, PostgreSQL custody triggers, Celery tasks, offline PWA и dashboards.
+**Foundation / Stage A завершён:** typed runtime settings, async SQLAlchemy session, identity/scope schema, явный Alembic migration с проверкой drift, login с Argon2id и коротким identity-only JWT, проверка active memberships и scoped RBAC, `/health/live`, `/health/ready`, JSON request-correlated logs. Команды пользователя и scoped membership доступны оператору из backend CLI; проверки Foundation и Manifest описаны в [backend README](backend/README.md).
+**Следующие этапы:** бизнес-сценарии передачи, PostgreSQL custody triggers, Celery tasks, offline PWA и dashboards. Пользователи и scoped memberships создаются оператором через `python -m app.cli` из `backend/`; публичного admin API нет.
 
 Все данные демонстрационные. Непрозрачные ссылки на ЛИС не гарантируют анонимность в реальном окружении. Перед реальным пилотом нужно отдельно подтвердить юридическую ответственность за физический контейнер, правила offline-разрешения, регламенты медицинской логистики, хранение данных, безопасность и процедуры восстановления.
 
 ## Локальное инфраструктурное окружение
 
-В Compose настроены только PostgreSQL и Redis для будущей разработки backend. Доменные endpoints и Celery worker пока не реализованы. Используются локальные образы `postgres:15` и `redis:7`; если какого-либо образа нет, запуск завершится ошибкой и не будет скачивать его.
+В Compose настроены PostgreSQL и Redis. Backend реализует Foundation и этап Manifest: регистрацию Samples, DRAFT Shipments, контейнеры, внешние ссылки, идемпотентные записи и запечатывание неизменяемого манифеста. Последующие сценарии передачи и приёмки ещё не реализованы. Используются локальные образы `postgres:15` и `redis:7`; если какого-либо образа нет, запуск завершится ошибкой и не будет скачивать его.
 
 ```bash
 test -f .env || cp .env.example .env
@@ -66,8 +66,8 @@ Redis предусмотрен как broker/cache для будущих best-ef
 docker compose down
 ```
 
-Миграции применяются отдельно из `backend/` командой `alembic upgrade head`. Локальный `.env` содержит только параметры разработки и исключён из Git.
+Миграции применяются отдельно из `backend/` командой `alembic upgrade head`. PostgreSQL owner из `POSTGRES_USER` используется только миграциями и тестовой очисткой; API подключается как `APP_POSTGRES_USER` и не владеет таблицами. Локальный `.env` содержит только параметры разработки и исключён из Git.
 
 ## Backend scaffold
 
-В `backend/` подготовлена модульная структура FastAPI и база identity/access-control Foundation. Версия Python для проекта — 3.12. Установка, миграция и запуск описаны в [backend/README.md](backend/README.md). Основные сценарии LabTrack пока не реализованы.
+В `backend/` находится модульная структура FastAPI, Foundation и Manifest. Версия Python для проекта — 3.12. Установка, миграция и запуск описаны в [backend/README.md](backend/README.md). Этапы custody и offline workflows остаются следующими задачами.
