@@ -24,6 +24,7 @@ async def execute_idempotently(
     key: str | None,
     request_data: Any,
     action: Callable[[], Awaitable[tuple[int, dict[str, Any]]]],
+    audit_details: dict[str, Any] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     key = key.strip() if key is not None else None
     if not key:
@@ -74,7 +75,8 @@ async def execute_idempotently(
                 operation=operation,
                 request_key=key,
                 request_hash=body_hash,
-                resource_id=str(body.get("id", "")) or None,
+                resource_id=(str(body.get("id") or body.get("handoff", {}).get("id", "")) or None),
+                details=audit_details,
             )
         )
         await session.commit()

@@ -37,7 +37,17 @@ class Shipment(Base):
             ["organizations.id", "organizations.region_id"],
             ondelete="RESTRICT",
         ),
-        CheckConstraint("status IN ('DRAFT', 'READY_FOR_PICKUP')", name="manifest_status"),
+        CheckConstraint(
+            "status IN ('DRAFT', 'READY_FOR_PICKUP', 'PICKUP_PENDING', 'IN_TRANSIT', 'CANCELLED')",
+            name="manifest_status",
+        ),
+        CheckConstraint(
+            "(status = 'CANCELLED' AND closed_at IS NOT NULL AND closed_by IS NOT NULL "
+            "AND length(trim(closure_reason)) > 0) OR "
+            "(status <> 'CANCELLED' AND closed_at IS NULL AND closed_by IS NULL "
+            "AND closure_reason IS NULL)",
+            name="closure_fields",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -55,6 +65,9 @@ class Shipment(Base):
     )
     expected_delivery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sealed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    closed_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    closure_reason: Mapped[str | None] = mapped_column(String(500))
     created_by_user_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -107,3 +120,79 @@ class ContainerItem(Base):
     )
     receipt_comment: Mapped[str | None] = mapped_column(String(1000))
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Handoff(Base):
+    """Append-only custody attempt attached to a shipment aggregate."""
+
+    __tablename__ = "handoffs"
+    __table_args__ = (
+        CheckConstraint("kind IN ('PICKUP', 'DELIVERY')", name="handoff_kind"),
+        CheckConstraint(
+            "status IN ('PENDING', 'CONFIRMED', 'WITHDRAWN', 'SUPERSEDED')",
+            name="handoff_status",
+        ),
+        CheckConstraint("attempt_no > 0", name="positive_attempt"),
+        CheckConstraint(
+            "(kind = 'PICKUP' AND container_id IS NULL) OR "
+            "(kind = 'DELIVERY' AND container_id IS NOT NULL)",
+            name="handoff_container_scope",
+        ),
+        CheckConstraint(
+            "(status = 'PENDING' AND confirmed_by IS NULL AND confirmed_at IS NULL "
+            "AND withdrawn_by IS NULL AND withdrawn_at IS NULL AND withdrawal_reason IS NULL "
+            "AND superseded_by_incident_id IS NULL AND superseded_at IS NULL) OR "
+            "(status = 'CONFIRMED' AND confirmed_by IS NOT NULL AND confirmed_at IS NOT NULL "
+            "AND withdrawn_by IS NULL AND withdrawn_at IS NULL AND withdrawal_reason IS NULL "
+            "AND superseded_by_incident_id IS NULL AND superseded_at IS NULL) OR "
+            "(status = 'WITHDRAWN' AND confirmed_by IS NULL AND confirmed_at IS NULL "
+            "AND withdrawn_by IS NOT NULL AND withdrawn_at IS NOT NULL "
+            "AND length(trim(withdrawal_reason)) > 0 AND superseded_by_incident_id IS NULL "
+            "AND superseded_at IS NULL) OR "
+            "(status = 'SUPERSEDED' AND superseded_by_incident_id IS NOT NULL "
+            "AND superseded_at IS NOT NULL)",
+            name="handoff_terminal_fields",
+        ),
+        Index("ix_handoffs_shipment_kind_status", "shipment_id", "kind", "status"),
+        Index(
+            "uq_handoff_pickup_attempt",
+            "shipment_id",
+            "attempt_no",
+            unique=True,
+            postgresql_where=text("kind = 'PICKUP'"),
+        ),
+        Index(
+            "uq_handoff_delivery_attempt",
+            "shipment_id",
+            "container_id",
+            "attempt_no",
+            unique=True,
+            postgresql_where=text("kind = 'DELIVERY'"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    shipment_id: Mapped[UUID] = mapped_column(
+        ForeignKey("shipments.id", ondelete="RESTRICT"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    container_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("transport_containers.id", ondelete="RESTRICT")
+    )
+    attempt_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'PENDING'")
+    )
+    initiated_by: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    initiated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    confirmed_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    withdrawn_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    withdrawal_reason: Mapped[str | None] = mapped_column(String(500))
+    superseded_by_incident_id: Mapped[UUID | None] = mapped_column(Uuid)
+    superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

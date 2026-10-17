@@ -8,19 +8,23 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
+from app.core.errors import API_ERROR_RESPONSES
 from app.db.session import get_db_session
 from app.modules.idempotency.service import execute_idempotently
 from app.modules.identity.access import Principal, get_current_principal
 from app.modules.identity.models import Membership, Organization, User
 from app.modules.samples.models import Sample
-from app.modules.shipments.models import ContainerItem, Shipment, TransportContainer
+from app.modules.shipments.models import ContainerItem, Handoff, Shipment, TransportContainer
 from app.modules.shipments.schemas import (
     AddSampleRequest,
     AssignCourierRequest,
+    ContainerCodesRequest,
     ContainerItemWriteResponse,
     CreateShipmentRequest,
+    HandoffActionResult,
     ManifestResponse,
     PagedShipmentResponse,
+    ReasonRequest,
     ShipmentResponse,
     TransportContainerResponse,
     UpdateDraftShipmentRequest,
@@ -47,9 +51,9 @@ def shipment_dict(row: Shipment) -> dict:
         "created_at": row.created_at.isoformat(),
         "updated_at": (row.__dict__.get("updated_at") or row.created_at).isoformat(),
         "completed_at": None,
-        "closed_at": None,
-        "closed_by": None,
-        "closure_reason": None,
+        "closed_at": row.closed_at.isoformat() if row.closed_at else None,
+        "closed_by": str(row.closed_by) if row.closed_by else None,
+        "closure_reason": row.closure_reason,
     }
 
 
@@ -120,7 +124,9 @@ async def manifest_dict(session: AsyncSession, row: Shipment) -> dict:
     }
 
 
-async def mutate(session, principal, operation, key, payload, action, response):
+async def mutate(
+    session, principal, operation, key, payload, action, response, *, audit_details=None
+):
     code, body = await execute_idempotently(
         session,
         actor_id=principal.user_id,
@@ -128,9 +134,81 @@ async def mutate(session, principal, operation, key, payload, action, response):
         key=key,
         request_data=payload,
         action=action,
+        audit_details=audit_details,
     )
     response.status_code = code
     return body
+
+
+def handoff_dict(row: Handoff) -> dict:
+    return {
+        "id": str(row.id),
+        "kind": row.kind,
+        "attempt_no": row.attempt_no,
+        "status": row.status,
+        "initiated_by": str(row.initiated_by),
+        "initiated_at": row.initiated_at.isoformat(),
+        "confirmed_by": str(row.confirmed_by) if row.confirmed_by else None,
+        "confirmed_at": row.confirmed_at.isoformat() if row.confirmed_at else None,
+        "withdrawn_at": row.withdrawn_at.isoformat() if row.withdrawn_at else None,
+        "withdrawn_by": str(row.withdrawn_by) if row.withdrawn_by else None,
+        "withdrawal_reason": row.withdrawal_reason,
+        "container_id": str(row.container_id) if row.container_id else None,
+        "superseded_by_incident_id": (
+            str(row.superseded_by_incident_id) if row.superseded_by_incident_id else None
+        ),
+        "superseded_at": row.superseded_at.isoformat() if row.superseded_at else None,
+    }
+
+
+async def pickup_container_codes(session: AsyncSession, shipment_id: UUID) -> list[str]:
+    return list(
+        await session.scalars(
+            select(TransportContainer.code)
+            .where(TransportContainer.shipment_id == shipment_id)
+            .order_by(TransportContainer.id)
+        )
+    )
+
+
+async def lock_pickup_shipment(
+    session: AsyncSession,
+    principal: Principal,
+    shipment_id: UUID,
+    *,
+    role: str,
+) -> Shipment:
+    row = await session.scalar(select(Shipment).where(Shipment.id == shipment_id).with_for_update())
+    if row is None:
+        raise HTTPException(404, "Resource not found")
+    allowed = (
+        principal.has_role("SENDER_OPERATOR", organization_id=row.sender_organization_id)
+        if role == "SENDER_OPERATOR"
+        else row.courier_user_id == principal.user_id
+        and principal.has_role("COURIER", region_id=row.region_id)
+    )
+    if not allowed:
+        raise HTTPException(404, "Resource not found")
+    if row.sealed_at is None:
+        raise HTTPException(409, "Shipment must be sealed before Pickup")
+    return row
+
+
+async def active_assigned_courier(session: AsyncSession, row: Shipment) -> bool:
+    return bool(
+        await session.scalar(
+            select(Membership.id)
+            .join(User)
+            .where(
+                Membership.user_id == row.courier_user_id,
+                Membership.region_id == row.region_id,
+                Membership.organization_id.is_(None),
+                Membership.role == "COURIER",
+                Membership.is_active.is_(True),
+                User.is_active.is_(True),
+            )
+        )
+    )
 
 
 @router.post("", status_code=201, response_model=ShipmentResponse)
@@ -567,5 +645,288 @@ async def seal(
             {},
             action,
             response,
+        )
+    )
+
+
+@router.post(
+    "/{shipment_id}/handoffs/pickup/confirm-release",
+    response_model=HandoffActionResult,
+    responses=API_ERROR_RESPONSES,
+)
+async def confirm_pickup_release(
+    shipment_id: UUID,
+    request: ContainerCodesRequest,
+    response: Response,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=128)],
+):
+    # Authorization is evaluated before idempotency replay and rechecked under the aggregate lock.
+    preview = await visible(session, principal, shipment_id)
+    if not principal.has_role("SENDER_OPERATOR", organization_id=preview.sender_organization_id):
+        raise HTTPException(404, "Resource not found")
+    if not await active_assigned_courier(session, preview):
+        raise HTTPException(409, "Shipment must have an active assigned Courier")
+
+    async def action():
+        row = await lock_pickup_shipment(session, principal, shipment_id, role="SENDER_OPERATOR")
+        if not await active_assigned_courier(session, row):
+            raise HTTPException(409, "Shipment must have an active assigned Courier")
+        if row.status != "READY_FOR_PICKUP":
+            raise HTTPException(409, "Shipment is not ready for Pickup release")
+        expected_codes = await pickup_container_codes(session, row.id)
+        if sorted(request.container_codes) != sorted(expected_codes):
+            raise HTTPException(409, "Container codes must match the complete sealed manifest")
+        previous_attempt = await session.scalar(
+            select(func.max(Handoff.attempt_no)).where(
+                Handoff.shipment_id == row.id, Handoff.kind == "PICKUP"
+            )
+        )
+        handoff = Handoff(
+            shipment_id=row.id,
+            kind="PICKUP",
+            attempt_no=(previous_attempt or 0) + 1,
+            status="PENDING",
+            initiated_by=principal.user_id,
+        )
+        session.add(handoff)
+        row.status = "PICKUP_PENDING"
+        row.version += 1
+        await session.flush()
+        await session.refresh(row, attribute_names=["updated_at"])
+        return 200, {
+            "shipment_id": str(row.id),
+            "shipment_status": row.status,
+            "version": row.version,
+            "handoff": handoff_dict(handoff),
+            "container_id": None,
+            "container_status": None,
+        }
+
+    return HandoffActionResult.model_validate(
+        await mutate(
+            session,
+            principal,
+            f"shipments.{shipment_id}.handoffs.pickup.confirm-release",
+            idempotency_key,
+            request.model_dump(mode="json"),
+            action,
+            response,
+        )
+    )
+
+
+@router.post(
+    "/{shipment_id}/handoffs/pickup/confirm-pickup",
+    response_model=HandoffActionResult,
+    responses=API_ERROR_RESPONSES,
+)
+async def confirm_pickup(
+    shipment_id: UUID,
+    request: ContainerCodesRequest,
+    response: Response,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=128)],
+):
+    preview = await visible(session, principal, shipment_id)
+    if preview.courier_user_id != principal.user_id or not principal.has_role(
+        "COURIER", region_id=preview.region_id
+    ):
+        raise HTTPException(404, "Resource not found")
+    if not await active_assigned_courier(session, preview):
+        raise HTTPException(404, "Resource not found")
+
+    async def action():
+        row = await lock_pickup_shipment(session, principal, shipment_id, role="COURIER")
+        if not await active_assigned_courier(session, row):
+            raise HTTPException(404, "Resource not found")
+        if row.status != "PICKUP_PENDING":
+            raise HTTPException(409, "Shipment has no pending Pickup")
+        handoff = await session.scalar(
+            select(Handoff)
+            .where(
+                Handoff.shipment_id == row.id,
+                Handoff.kind == "PICKUP",
+                Handoff.status == "PENDING",
+            )
+            .with_for_update()
+        )
+        if handoff is None:
+            raise HTTPException(409, "Shipment has no pending Pickup")
+        if handoff.initiated_by == principal.user_id:
+            raise HTTPException(409, "Pickup requires confirmation by a different actor")
+        containers = list(
+            await session.scalars(
+                select(TransportContainer)
+                .where(TransportContainer.shipment_id == row.id)
+                .order_by(TransportContainer.id)
+                .with_for_update()
+            )
+        )
+        if sorted(request.container_codes) != sorted(item.code for item in containers):
+            raise HTTPException(409, "Container codes must match the complete sealed manifest")
+        now = await session.scalar(select(func.now()))
+        handoff.status = "CONFIRMED"
+        handoff.confirmed_by = principal.user_id
+        handoff.confirmed_at = now
+        await session.flush()
+        for container in containers:
+            container.delivery_status = "IN_TRANSIT"
+            container.state_version += 1
+        await session.flush()
+        row.status = "IN_TRANSIT"
+        row.version += 1
+        await session.flush()
+        await session.refresh(row, attribute_names=["updated_at"])
+        return 200, {
+            "shipment_id": str(row.id),
+            "shipment_status": row.status,
+            "version": row.version,
+            "handoff": handoff_dict(handoff),
+            "container_id": None,
+            "container_status": None,
+        }
+
+    return HandoffActionResult.model_validate(
+        await mutate(
+            session,
+            principal,
+            f"shipments.{shipment_id}.handoffs.pickup.confirm-pickup",
+            idempotency_key,
+            request.model_dump(mode="json"),
+            action,
+            response,
+        )
+    )
+
+
+@router.post(
+    "/{shipment_id}/handoffs/pickup/withdraw",
+    response_model=HandoffActionResult,
+    responses=API_ERROR_RESPONSES,
+    description=(
+        "The initiating Sender asserts that no physical transfer occurred and all containers "
+        "remain at origin. The reason and assertion are stored in the audit event. If physical "
+        "custody is disputed, use the incident review workflow instead."
+    ),
+)
+async def withdraw_pickup(
+    shipment_id: UUID,
+    request: ReasonRequest,
+    response: Response,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=128)],
+):
+    preview = await visible(session, principal, shipment_id)
+    if not principal.has_role("SENDER_OPERATOR", organization_id=preview.sender_organization_id):
+        raise HTTPException(404, "Resource not found")
+
+    async def action():
+        row = await lock_pickup_shipment(session, principal, shipment_id, role="SENDER_OPERATOR")
+        if row.status != "PICKUP_PENDING":
+            raise HTTPException(409, "Shipment has no pending Pickup to withdraw")
+        handoff = await session.scalar(
+            select(Handoff)
+            .where(
+                Handoff.shipment_id == row.id,
+                Handoff.kind == "PICKUP",
+                Handoff.status == "PENDING",
+            )
+            .with_for_update()
+        )
+        if handoff is None or handoff.initiated_by != principal.user_id:
+            raise HTTPException(409, "Only the initiating Sender can withdraw pending Pickup")
+        handoff.status = "WITHDRAWN"
+        handoff.withdrawn_by = principal.user_id
+        handoff.withdrawn_at = await session.scalar(select(func.now()))
+        handoff.withdrawal_reason = request.reason
+        row.status = "READY_FOR_PICKUP"
+        row.version += 1
+        await session.flush()
+        await session.refresh(row, attribute_names=["updated_at"])
+        return 200, {
+            "shipment_id": str(row.id),
+            "shipment_status": row.status,
+            "version": row.version,
+            "handoff": handoff_dict(handoff),
+            "container_id": None,
+            "container_status": None,
+        }
+
+    return HandoffActionResult.model_validate(
+        await mutate(
+            session,
+            principal,
+            f"shipments.{shipment_id}.handoffs.pickup.withdraw",
+            idempotency_key,
+            request.model_dump(mode="json"),
+            action,
+            response,
+            audit_details={
+                "reason": request.reason,
+                "physical_release_occurred": False,
+                "containers_remain_at_origin": True,
+            },
+        )
+    )
+
+
+@router.post(
+    "/{shipment_id}/cancel",
+    response_model=ShipmentResponse,
+    responses=API_ERROR_RESPONSES,
+)
+async def cancel_shipment(
+    shipment_id: UUID,
+    request: ReasonRequest,
+    response: Response,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=128)],
+):
+    preview = await visible(session, principal, shipment_id)
+    if not principal.has_role("SENDER_OPERATOR", organization_id=preview.sender_organization_id):
+        raise HTTPException(404, "Resource not found")
+
+    async def action():
+        row = await session.scalar(
+            select(Shipment).where(Shipment.id == shipment_id).with_for_update()
+        )
+        if row is None or not principal.has_role(
+            "SENDER_OPERATOR", organization_id=row.sender_organization_id
+        ):
+            raise HTTPException(404, "Resource not found")
+        if row.status not in {"DRAFT", "READY_FOR_PICKUP"}:
+            raise HTTPException(409, "Shipment can only be cancelled before Pickup release")
+        if await session.scalar(
+            select(Handoff.id).where(
+                Handoff.shipment_id == row.id,
+                Handoff.kind == "PICKUP",
+                Handoff.status.in_(["PENDING", "CONFIRMED"]),
+            )
+        ):
+            raise HTTPException(409, "Withdraw pending Pickup before cancelling shipment")
+        row.status = "CANCELLED"
+        row.closed_at = await session.scalar(select(func.now()))
+        row.closed_by = principal.user_id
+        row.closure_reason = request.reason
+        row.version += 1
+        await session.flush()
+        await session.refresh(row, attribute_names=["updated_at"])
+        return 200, shipment_dict(row)
+
+    return ShipmentResponse.model_validate(
+        await mutate(
+            session,
+            principal,
+            f"shipments.{shipment_id}.cancel",
+            idempotency_key,
+            request.model_dump(mode="json"),
+            action,
+            response,
+            audit_details={"reason": request.reason},
         )
     )
