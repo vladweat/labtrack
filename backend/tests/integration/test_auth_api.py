@@ -93,7 +93,11 @@ async def test_invalid_password_and_unknown_email_share_generic_unauthorized(
         )
 
     assert wrong_password.status_code == unknown_user.status_code == 401
-    assert wrong_password.json() == unknown_user.json()
+    wrong_error = wrong_password.json()["error"]
+    unknown_error = unknown_user.json()["error"]
+    assert {key: value for key, value in wrong_error.items() if key != "request_id"} == {
+        key: value for key, value in unknown_error.items() if key != "request_id"
+    }
 
 
 @pytest.mark.asyncio
@@ -148,4 +152,4 @@ async def test_database_migration_revision_is_applied(database_sessions) -> None
     async with database_sessions() as session:
         revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
 
-    assert revision == "0002_manifest"
+    assert revision == "0003_pickup"

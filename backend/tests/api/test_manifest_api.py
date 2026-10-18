@@ -112,7 +112,7 @@ async def test_sample_write_requires_idempotency_key() -> None:
         )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "Idempotency-Key header is required"
+    assert response.json()["error"]["message"] == "Idempotency-Key header is required"
 
 
 @pytest.mark.asyncio

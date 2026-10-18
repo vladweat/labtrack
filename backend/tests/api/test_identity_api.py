@@ -114,7 +114,7 @@ async def test_wrong_password_and_missing_bearer_are_rejected() -> None:
         missing_bearer = await client.get("/api/v1/auth/me")
 
     assert bad_login.status_code == 401
-    assert bad_login.json()["detail"] == "Invalid email or password"
+    assert bad_login.json()["error"]["message"] == "Invalid email or password"
     assert missing_bearer.status_code == 401
 
 
