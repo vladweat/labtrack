@@ -3,7 +3,7 @@
 > **Исторический базовый документ v0.6.** v0.6.1 supersedes contradictory requirements; current decisions and API are in [Decision Register v0.6.1](20-decisions-v061.md), [Custody Exceptions](21-custody-exceptions-v061.md), [Offline Integrity](22-offline-integrity-v061.md), [DB Delta](23-data-model-v061.md), [API](24-api-and-operations-v061.md). Keep v0.6 rules only where unchanged.
 
 **Status:** accepted questionnaire answers + explicit follow-up approval, 2026-11-01.  
-**Authority:** decisions below supersede conflicting v0.2–v0.5 assumptions; derived technical policies are labelled as such. The project is **documentation-only** (no backend implementation yet).
+**Authority:** decisions below supersede conflicting v0.2–v0.5 assumptions; derived technical policies are labelled as such. At the time this v0.6 decision document was written, the project was documentation-only and had no backend implementation.
 
 ## 1. Previously approved baseline
 

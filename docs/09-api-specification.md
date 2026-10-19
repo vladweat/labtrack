@@ -122,7 +122,7 @@
 | `POST` | `/shipments/{id}/handoffs/pickup/withdraw` | Original Sender actor | `PICKUP_PENDING → READY_FOR_PICKUP` | `200 HandoffActionResult` |
 | `POST` | `/shipments/{id}/handoffs/delivery/withdraw` | Original Courier actor | `DELIVERY_PENDING → IN_TRANSIT` | `200 HandoffActionResult` |
 
-**WithdrawRequest:** `{reason:string}`; причина обязательна для операционной прозрачности. Отзыв до второго подтверждения переводит `handoff` в `WITHDRAWN`; следующая попытка создаёт новый `attempt_no`. Нет нового типа инцидента.
+**WithdrawRequest:** `{reason:string}`; причина обязательна для операционной прозрачности. Вызов Pickup withdraw является явным утверждением Sender, что физической передачи не было и контейнеры остаются на стороне отправителя; утверждение вместе с причиной пишется в аудит. Если факт передачи спорный, применяется incident/review, а не обычный withdraw. Отзыв до второго подтверждения переводит `handoff` в `WITHDRAWN`; следующая попытка создаёт новый `attempt_no`. Нет нового типа инцидента.
 
 **HandoffActionResult:**
 ~~~json

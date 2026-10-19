@@ -1,6 +1,6 @@
 # LabTrack v0.6.1 — Verification, Test Matrix & Implementation Gates
 
-**Scope:** requirement-level verification plan and implementation gates. Foundation and Manifest/Stage B are implemented with real PostgreSQL migrations and integration tests; later custody, receiving, offline, and analytics workflows remain unimplemented. Start from [v0.6 plan](19-roadmap-v06.md) and hardening decisions [20](20-decisions-v061.md). Use **real PostgreSQL** for locks, triggers, partial indexes and migration testing.
+**Scope:** requirement-level verification plan and implementation gates. Foundation, Manifest/Stage B, and Stage C whole-Shipment Pickup are implemented with PostgreSQL migrations and integration tests. Per-container delivery, receiving, incidents, offline, notifications, and analytics remain unimplemented. Start from [v0.6 plan](19-roadmap-v06.md) and hardening decisions [20](20-decisions-v061.md). Use **real PostgreSQL** for locks, triggers, partial indexes and migration testing.
 
 ## 1. P0 — Chain of custody
 
@@ -82,6 +82,6 @@
 
 **Offline Ready for Implementation:** OPEN-04 is **APPROVED**: manifest revision, target Container/Handoff version, Pickup phase and active authorization are relevant; unrelated Shipment bookkeeping alone is not. 24h snapshot guard, 90d replay, tombstones and two-device conflicts remain required tests.
 
-**Stage B implemented:** migrations and core FastAPI routes run against PostgreSQL; tests cover the primary sample-to-sealed-manifest flow, idempotent replay, and database trigger protection. The wider v0.6.1 OpenAPI contract, offline client, operational dashboards, and later custody/receiving workflows are not complete.
+**Stage B and Stage C implemented locally:** migrations and FastAPI routes cover the sample-to-sealed-manifest flow and bilateral whole-Shipment Pickup, including withdrawal, cancellation, idempotency, audit, row locking, and database trigger protection. The remaining v0.6.1 OpenAPI contract, offline client, operational dashboards, and later delivery/receiving workflows are not complete. This status reflects local branch state and does not imply the changes have been committed or deployed.
 
 **Scope control:** no new third Sample/Container discrepancy type, no phantom witness signatures, no retrospective custody acceptance from stale commands, no Courier reassignment after seal.

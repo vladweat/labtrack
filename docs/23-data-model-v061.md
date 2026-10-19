@@ -1,6 +1,6 @@
 # LabTrack v0.6.1 — PostgreSQL Delta & Integrity Rules
 
-**Status: design only, not executable Alembic migration.** Build on [v0.6 relational model](17-data-model-v06.md); preserve Shipment-first locking, partially delivered receiving, sealed manifest triggers. User-approved changes: [20-decisions-v061.md](20-decisions-v061.md).
+**Status:** This remains the design for the full v0.6.1 database delta; Alembic revision `0003_pickup` implements the Stage C subset only. Delivery, receipt, incidents, offline, and other proposed schema changes below remain design, not executable migrations. Build on [v0.6 relational model](17-data-model-v06.md); preserve Shipment-first locking, partially delivered receiving, and sealed manifest triggers. User-approved changes: [20-decisions-v061.md](20-decisions-v061.md).
 
 ## 1. New tables (proposed physical mapping)
 
