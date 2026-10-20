@@ -12,15 +12,23 @@ from app.core.errors import API_ERROR_RESPONSES
 from app.db.session import get_db_session
 from app.modules.idempotency.service import execute_idempotently
 from app.modules.identity.access import Principal, get_current_principal
-from app.modules.identity.models import Membership, Organization, User
+from app.modules.identity.models import Membership, Organization, Region, User
 from app.modules.samples.models import Sample
-from app.modules.shipments.models import ContainerItem, Handoff, Shipment, TransportContainer
+from app.modules.shipments.models import (
+    ContainerItem,
+    Handoff,
+    ReceivingSession,
+    Shipment,
+    TransportContainer,
+)
 from app.modules.shipments.schemas import (
     AddSampleRequest,
     AssignCourierRequest,
+    ContainerCodeRequest,
     ContainerCodesRequest,
     ContainerItemWriteResponse,
     CreateShipmentRequest,
+    DeliveryHandoffHistory,
     HandoffActionResult,
     ManifestResponse,
     PagedShipmentResponse,
@@ -31,6 +39,9 @@ from app.modules.shipments.schemas import (
 )
 
 router = APIRouter(prefix="/shipments", tags=["shipments"])
+DELIVERY_API_ERROR_RESPONSES = {
+    status: API_ERROR_RESPONSES[status] for status in (401, 403, 404, 409, 422, 503)
+}
 
 
 def shipment_dict(row: Shipment) -> dict:
@@ -62,6 +73,7 @@ async def visible(session: AsyncSession, principal: Principal, shipment_id: UUID
     if row is None or not (
         principal.has_role("SENDER_OPERATOR", organization_id=row.sender_organization_id)
         or principal.has_role("LAB_MANAGER", organization_id=row.destination_organization_id)
+        or principal.has_role("LAB_OPERATOR", organization_id=row.destination_organization_id)
         or (
             row.courier_user_id == principal.user_id
             and principal.has_role("COURIER", region_id=row.region_id)
@@ -112,7 +124,9 @@ async def manifest_dict(session: AsyncSession, row: Shipment) -> dict:
                     }
                     for item, sample in items
                 ],
-                "receipt_evidence_method": None,
+                "receipt_evidence_method": (
+                    container.receipt_evidence.get("method") if container.receipt_evidence else None
+                ),
             }
         )
     return {
@@ -209,6 +223,88 @@ async def active_assigned_courier(session: AsyncSession, row: Shipment) -> bool:
             )
         )
     )
+
+
+async def active_destination_lab_member(
+    session: AsyncSession, shipment: Shipment, user_id: UUID
+) -> bool:
+    return bool(
+        await session.scalar(
+            select(Membership.id)
+            .join(User)
+            .join(Organization, Organization.id == Membership.organization_id)
+            .join(Region, Region.id == Organization.region_id)
+            .where(
+                Membership.user_id == user_id,
+                Membership.organization_id == shipment.destination_organization_id,
+                Membership.role.in_(("LAB_OPERATOR", "LAB_MANAGER")),
+                Membership.is_active.is_(True),
+                User.is_active.is_(True),
+                Organization.is_active.is_(True),
+                Region.is_active.is_(True),
+            )
+        )
+    )
+
+
+async def lock_delivery_scope(
+    session: AsyncSession,
+    principal: Principal,
+    shipment_id: UUID,
+    container_id: UUID,
+    *,
+    actor: str,
+) -> tuple[Shipment, TransportContainer]:
+    shipment = await session.scalar(
+        select(Shipment).where(Shipment.id == shipment_id).with_for_update()
+    )
+    if shipment is None:
+        raise HTTPException(404, "Resource not found")
+    if actor == "COURIER":
+        authorized = shipment.courier_user_id == principal.user_id and principal.has_role(
+            "COURIER", region_id=shipment.region_id
+        )
+    else:
+        authorized = principal.has_role(
+            "LAB_OPERATOR", organization_id=shipment.destination_organization_id
+        ) or principal.has_role("LAB_MANAGER", organization_id=shipment.destination_organization_id)
+    if not authorized:
+        raise HTTPException(404, "Resource not found")
+    container = await session.scalar(
+        select(TransportContainer)
+        .where(
+            TransportContainer.id == container_id,
+            TransportContainer.shipment_id == shipment.id,
+        )
+        .order_by(TransportContainer.id)
+        .with_for_update()
+    )
+    if container is None:
+        raise HTTPException(404, "Resource not found")
+    return shipment, container
+
+
+async def derive_delivery_shipment_status(session: AsyncSession, shipment_id: UUID) -> str:
+    statuses = list(
+        await session.scalars(
+            select(TransportContainer.delivery_status).where(
+                TransportContainer.shipment_id == shipment_id
+            )
+        )
+    )
+    if statuses and all(status == "UNDELIVERED_CLOSED" for status in statuses):
+        return "CLOSED_UNDELIVERED"
+    if all(status in {"RECEIVED", "UNDELIVERED_CLOSED"} for status in statuses) and any(
+        status == "RECEIVED" for status in statuses
+    ):
+        return "RECEIVING"
+    if any(status == "RECEIVED" for status in statuses):
+        return "PARTIALLY_DELIVERED"
+    if any(status == "BLOCKED" for status in statuses):
+        return "DELIVERY_BLOCKED"
+    if any(status == "DELIVERY_PENDING" for status in statuses):
+        return "DELIVERY_PENDING"
+    return "IN_TRANSIT"
 
 
 @router.post("", status_code=201, response_model=ShipmentResponse)
@@ -871,6 +967,355 @@ async def withdraw_pickup(
                 "containers_remain_at_origin": True,
             },
         )
+    )
+
+
+@router.post(
+    "/{shipment_id}/containers/{container_id}/handoffs/delivery/confirm-delivery",
+    response_model=HandoffActionResult,
+    responses=DELIVERY_API_ERROR_RESPONSES,
+    tags=["Handoffs"],
+    operation_id="courierInitiateContainerDelivery",
+    summary="Courier initiates one container delivery handoff",
+)
+async def courier_initiate_container_delivery(
+    shipment_id: UUID,
+    container_id: UUID,
+    request: ContainerCodeRequest,
+    response: Response,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=128)],
+):
+    preview = await session.get(Shipment, shipment_id)
+    if (
+        preview is None
+        or preview.courier_user_id != principal.user_id
+        or not principal.has_role("COURIER", region_id=preview.region_id)
+    ):
+        raise HTTPException(404, "Resource not found")
+    if not await active_assigned_courier(session, preview):
+        raise HTTPException(404, "Resource not found")
+
+    async def action():
+        shipment, container = await lock_delivery_scope(
+            session, principal, shipment_id, container_id, actor="COURIER"
+        )
+        if not await active_assigned_courier(session, shipment):
+            raise HTTPException(404, "Resource not found")
+        if shipment.sealed_at is None or shipment.status not in {
+            "IN_TRANSIT",
+            "DELIVERY_PENDING",
+            "PARTIALLY_DELIVERED",
+        }:
+            raise HTTPException(409, "Shipment is not in a Delivery phase")
+        pickup_confirmed = await session.scalar(
+            select(Handoff.id).where(
+                Handoff.shipment_id == shipment.id,
+                Handoff.kind == "PICKUP",
+                Handoff.status == "CONFIRMED",
+            )
+        )
+        if pickup_confirmed is None:
+            raise HTTPException(409, "Whole-Shipment Pickup must be confirmed first")
+        if container.delivery_status != "IN_TRANSIT":
+            raise HTTPException(409, "Container is not in transit")
+        if request.container_code != container.code:
+            raise HTTPException(409, "Container code does not match the sealed manifest")
+        previous_attempt = await session.scalar(
+            select(func.max(Handoff.attempt_no)).where(
+                Handoff.container_id == container.id,
+                Handoff.kind == "DELIVERY",
+            )
+        )
+        handoff = Handoff(
+            shipment_id=shipment.id,
+            kind="DELIVERY",
+            container_id=container.id,
+            attempt_no=(previous_attempt or 0) + 1,
+            status="PENDING",
+            initiated_by=principal.user_id,
+        )
+        session.add(handoff)
+        await session.flush()
+        container.delivery_status = "DELIVERY_PENDING"
+        container.state_version += 1
+        await session.flush()
+        shipment.status = await derive_delivery_shipment_status(session, shipment.id)
+        shipment.version += 1
+        await session.flush()
+        await session.refresh(shipment, attribute_names=["updated_at"])
+        return 200, {
+            "shipment_id": str(shipment.id),
+            "shipment_status": shipment.status,
+            "version": shipment.version,
+            "handoff": handoff_dict(handoff),
+            "container_id": str(container.id),
+            "container_status": container.delivery_status,
+        }
+
+    return HandoffActionResult.model_validate(
+        await mutate(
+            session,
+            principal,
+            f"shipments.{shipment_id}.containers.{container_id}.handoffs.delivery.confirm-delivery",
+            idempotency_key,
+            request.model_dump(mode="json"),
+            action,
+            response,
+        )
+    )
+
+
+@router.post(
+    "/{shipment_id}/containers/{container_id}/handoffs/delivery/confirm-receipt",
+    response_model=HandoffActionResult,
+    responses=DELIVERY_API_ERROR_RESPONSES,
+    tags=["Handoffs"],
+    operation_id="labConfirmContainerReceipt",
+    summary="Destination lab confirms one container custody",
+)
+async def lab_confirm_container_receipt(
+    shipment_id: UUID,
+    container_id: UUID,
+    request: ContainerCodeRequest,
+    response: Response,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=128)],
+):
+    preview = await session.get(Shipment, shipment_id)
+    if preview is None or not (
+        principal.has_role("LAB_OPERATOR", organization_id=preview.destination_organization_id)
+        or principal.has_role("LAB_MANAGER", organization_id=preview.destination_organization_id)
+    ):
+        raise HTTPException(404, "Resource not found")
+    if not await active_destination_lab_member(session, preview, principal.user_id):
+        raise HTTPException(404, "Resource not found")
+
+    async def action():
+        shipment, container = await lock_delivery_scope(
+            session, principal, shipment_id, container_id, actor="LAB"
+        )
+        if not await active_destination_lab_member(session, shipment, principal.user_id):
+            raise HTTPException(404, "Resource not found")
+        if shipment.sealed_at is None or shipment.status not in {
+            "DELIVERY_PENDING",
+            "PARTIALLY_DELIVERED",
+        }:
+            raise HTTPException(409, "Shipment is not awaiting Delivery receipt")
+        if container.delivery_status != "DELIVERY_PENDING":
+            raise HTTPException(409, "Container has no pending Delivery")
+        if request.container_code != container.code:
+            raise HTTPException(409, "Container code does not match the sealed manifest")
+        handoff = await session.scalar(
+            select(Handoff)
+            .where(
+                Handoff.shipment_id == shipment.id,
+                Handoff.container_id == container.id,
+                Handoff.kind == "DELIVERY",
+                Handoff.status == "PENDING",
+            )
+            .order_by(Handoff.attempt_no.desc())
+            .with_for_update()
+        )
+        if handoff is None:
+            raise HTTPException(409, "Container has no pending Delivery handoff")
+        if handoff.initiated_by == principal.user_id:
+            raise HTTPException(409, "Delivery receipt requires a different actor")
+        now = await session.scalar(select(func.now()))
+        handoff.status = "CONFIRMED"
+        handoff.confirmed_by = principal.user_id
+        handoff.confirmed_at = now
+        await session.flush()
+        container.delivery_status = "RECEIVED"
+        container.received_at = now
+        container.received_by = principal.user_id
+        container.receipt_evidence = {"method": "NORMAL", "handoff_id": str(handoff.id)}
+        container.state_version += 1
+        await session.flush()
+        open_session = await session.scalar(
+            select(ReceivingSession).where(
+                ReceivingSession.shipment_id == shipment.id,
+                ReceivingSession.status == "OPEN",
+            )
+        )
+        if open_session is None:
+            prior_session = await session.scalar(
+                select(ReceivingSession.id).where(ReceivingSession.shipment_id == shipment.id)
+            )
+            if prior_session is not None:
+                raise HTTPException(409, "Receiving session must be reopened by a Lab Manager")
+            session.add(
+                ReceivingSession(
+                    shipment_id=shipment.id,
+                    sequence=1,
+                    status="OPEN",
+                    opened_by=principal.user_id,
+                )
+            )
+        shipment.status = await derive_delivery_shipment_status(session, shipment.id)
+        shipment.version += 1
+        await session.flush()
+        await session.refresh(shipment, attribute_names=["updated_at"])
+        return 200, {
+            "shipment_id": str(shipment.id),
+            "shipment_status": shipment.status,
+            "version": shipment.version,
+            "handoff": handoff_dict(handoff),
+            "container_id": str(container.id),
+            "container_status": container.delivery_status,
+        }
+
+    return HandoffActionResult.model_validate(
+        await mutate(
+            session,
+            principal,
+            f"shipments.{shipment_id}.containers.{container_id}.handoffs.delivery.confirm-receipt",
+            idempotency_key,
+            request.model_dump(mode="json"),
+            action,
+            response,
+        )
+    )
+
+
+@router.post(
+    "/{shipment_id}/containers/{container_id}/handoffs/delivery/withdraw",
+    response_model=HandoffActionResult,
+    responses=DELIVERY_API_ERROR_RESPONSES,
+    tags=["Handoffs"],
+    operation_id="courierWithdrawContainerDelivery",
+    summary="Courier withdraws a pending container delivery",
+)
+async def courier_withdraw_container_delivery(
+    shipment_id: UUID,
+    container_id: UUID,
+    request: ReasonRequest,
+    response: Response,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=128)],
+):
+    preview = await session.get(Shipment, shipment_id)
+    if (
+        preview is None
+        or preview.courier_user_id != principal.user_id
+        or not principal.has_role("COURIER", region_id=preview.region_id)
+    ):
+        raise HTTPException(404, "Resource not found")
+    if not await active_assigned_courier(session, preview):
+        raise HTTPException(404, "Resource not found")
+
+    async def action():
+        shipment, container = await lock_delivery_scope(
+            session, principal, shipment_id, container_id, actor="COURIER"
+        )
+        if not await active_assigned_courier(session, shipment):
+            raise HTTPException(404, "Resource not found")
+        if shipment.status not in {"DELIVERY_PENDING", "PARTIALLY_DELIVERED"} or (
+            container.delivery_status != "DELIVERY_PENDING"
+        ):
+            raise HTTPException(409, "Container has no pending Delivery to withdraw")
+        handoff = await session.scalar(
+            select(Handoff)
+            .where(
+                Handoff.shipment_id == shipment.id,
+                Handoff.container_id == container.id,
+                Handoff.kind == "DELIVERY",
+                Handoff.status == "PENDING",
+                Handoff.initiated_by == principal.user_id,
+            )
+            .order_by(Handoff.attempt_no.desc())
+            .with_for_update()
+        )
+        if handoff is None:
+            raise HTTPException(409, "Only the initiating Courier can withdraw pending Delivery")
+        handoff.status = "WITHDRAWN"
+        handoff.withdrawn_by = principal.user_id
+        handoff.withdrawn_at = await session.scalar(select(func.now()))
+        handoff.withdrawal_reason = request.reason
+        await session.flush()
+        container.delivery_status = "IN_TRANSIT"
+        container.state_version += 1
+        await session.flush()
+        shipment.status = await derive_delivery_shipment_status(session, shipment.id)
+        shipment.version += 1
+        await session.flush()
+        await session.refresh(shipment, attribute_names=["updated_at"])
+        return 200, {
+            "shipment_id": str(shipment.id),
+            "shipment_status": shipment.status,
+            "version": shipment.version,
+            "handoff": handoff_dict(handoff),
+            "container_id": str(container.id),
+            "container_status": container.delivery_status,
+        }
+
+    return HandoffActionResult.model_validate(
+        await mutate(
+            session,
+            principal,
+            f"shipments.{shipment_id}.containers.{container_id}.handoffs.delivery.withdraw",
+            idempotency_key,
+            request.model_dump(mode="json"),
+            action,
+            response,
+            audit_details={"reason": request.reason},
+        )
+    )
+
+
+@router.get(
+    "/{shipment_id}/containers/{container_id}/handoffs/delivery",
+    response_model=DeliveryHandoffHistory,
+    responses=DELIVERY_API_ERROR_RESPONSES,
+    tags=["Handoffs"],
+    operation_id="listContainerDeliveryHandoffs",
+    summary="Read individual container handoff attempts",
+)
+async def list_container_delivery_handoffs(
+    shipment_id: UUID,
+    container_id: UUID,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+):
+    shipment = await session.get(Shipment, shipment_id)
+    if shipment is None:
+        raise HTTPException(404, "Resource not found")
+    allowed = (
+        principal.has_role("SENDER_OPERATOR", organization_id=shipment.sender_organization_id)
+        or (
+            shipment.courier_user_id == principal.user_id
+            and principal.has_role("COURIER", region_id=shipment.region_id)
+        )
+        or principal.has_role("LAB_OPERATOR", organization_id=shipment.destination_organization_id)
+        or principal.has_role("LAB_MANAGER", organization_id=shipment.destination_organization_id)
+    )
+    if not allowed:
+        raise HTTPException(404, "Resource not found")
+    container = await session.scalar(
+        select(TransportContainer).where(
+            TransportContainer.id == container_id,
+            TransportContainer.shipment_id == shipment.id,
+        )
+    )
+    if container is None:
+        raise HTTPException(404, "Resource not found")
+    items = list(
+        await session.scalars(
+            select(Handoff)
+            .where(
+                Handoff.shipment_id == shipment.id,
+                Handoff.container_id == container.id,
+                Handoff.kind == "DELIVERY",
+            )
+            .order_by(Handoff.attempt_no)
+        )
+    )
+    return DeliveryHandoffHistory(
+        container_id=container.id,
+        items=[handoff_dict(item) for item in items],
     )
 
 

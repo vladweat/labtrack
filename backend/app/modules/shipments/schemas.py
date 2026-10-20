@@ -76,6 +76,19 @@ class ReasonRequest(BaseModel):
         return value.strip()
 
 
+class ContainerCodeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    container_code: str = Field(min_length=1)
+
+    @field_validator("container_code")
+    @classmethod
+    def nonblank_container_code(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("container_code must not be blank")
+        return value.strip()
+
+
 class HandoffResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -104,6 +117,13 @@ class HandoffActionResult(BaseModel):
     handoff: HandoffResponse
     container_id: UUID | None
     container_status: ContainerStatus | None
+
+
+class DeliveryHandoffHistory(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    container_id: UUID
+    items: list[HandoffResponse]
 
 
 class ShipmentResponse(BaseModel):
