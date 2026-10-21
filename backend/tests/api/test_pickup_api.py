@@ -87,7 +87,9 @@ def test_stage_c_openapi_shapes_match_the_design_contract() -> None:
         assert "error" in error_schema["properties"]
 
 
-async def create_pickup_fixture(client: AsyncClient, *, shared_actor: bool = False) -> dict:
+async def create_pickup_fixture(
+    client: AsyncClient, *, shared_actor: bool = False, container_count: int = 1
+) -> dict:
     async with get_session_factory()() as session:
         region = await session.scalar(select(Region).where(Region.code == "PILOT"))
         destination = await session.scalar(
@@ -144,16 +146,19 @@ async def create_pickup_fixture(client: AsyncClient, *, shared_actor: bool = Fal
     sender_auth = {"Authorization": f"Bearer {sender_login.json()['access_token']}"}
     courier_auth = {"Authorization": f"Bearer {courier_login.json()['access_token']}"}
 
-    created_sample = await client.post(
-        "/api/v1/samples",
-        headers={**sender_auth, "Idempotency-Key": f"pickup-sample-{suffix}"},
-        json={
-            "origin_organization_id": str(sender_org_id),
-            "material_type": "BLOOD",
-            "collected_at": None,
-        },
-    )
-    assert created_sample.status_code == 201, created_sample.text
+    samples = []
+    for index in range(container_count):
+        created_sample = await client.post(
+            "/api/v1/samples",
+            headers={**sender_auth, "Idempotency-Key": f"pickup-sample-{suffix}-{index}"},
+            json={
+                "origin_organization_id": str(sender_org_id),
+                "material_type": "BLOOD",
+                "collected_at": None,
+            },
+        )
+        assert created_sample.status_code == 201, created_sample.text
+        samples.append(created_sample.json())
     shipment_response = await client.post(
         "/api/v1/shipments",
         headers={**sender_auth, "Idempotency-Key": f"pickup-shipment-{suffix}"},
@@ -171,18 +176,21 @@ async def create_pickup_fixture(client: AsyncClient, *, shared_actor: bool = Fal
         json={"courier_user_id": str(courier_id)},
     )
     assert assigned.status_code == 200, assigned.text
-    container_response = await client.post(
-        f"/api/v1/shipments/{shipment_id}/containers",
-        headers={**sender_auth, "Idempotency-Key": f"pickup-container-{suffix}"},
-    )
-    assert container_response.status_code == 201, container_response.text
-    container_id = container_response.json()["id"]
-    item_response = await client.post(
-        f"/api/v1/shipments/{shipment_id}/containers/{container_id}/items",
-        headers={**sender_auth, "Idempotency-Key": f"pickup-item-{suffix}"},
-        json={"sample_id": created_sample.json()["id"]},
-    )
-    assert item_response.status_code == 201, item_response.text
+    containers = []
+    for index, sample in enumerate(samples):
+        container_response = await client.post(
+            f"/api/v1/shipments/{shipment_id}/containers",
+            headers={**sender_auth, "Idempotency-Key": f"pickup-container-{suffix}-{index}"},
+        )
+        assert container_response.status_code == 201, container_response.text
+        container = container_response.json()
+        containers.append(container)
+        item_response = await client.post(
+            f"/api/v1/shipments/{shipment_id}/containers/{container['id']}/items",
+            headers={**sender_auth, "Idempotency-Key": f"pickup-item-{suffix}-{index}"},
+            json={"sample_id": sample["id"]},
+        )
+        assert item_response.status_code == 201, item_response.text
     sealed = await client.post(
         f"/api/v1/shipments/{shipment_id}/seal",
         headers={**sender_auth, "Idempotency-Key": f"pickup-seal-{suffix}"},
@@ -191,8 +199,9 @@ async def create_pickup_fixture(client: AsyncClient, *, shared_actor: bool = Fal
 
     return {
         "shipment_id": shipment_id,
-        "container_id": container_id,
-        "container_code": container_response.json()["code"],
+        "container_id": containers[0]["id"],
+        "container_code": containers[0]["code"],
+        "containers": containers,
         "sender_id": sender_id,
         "courier_id": courier_id,
         "sender_auth": sender_auth,
