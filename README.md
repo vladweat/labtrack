@@ -42,7 +42,7 @@ LabTrack — система прослеживаемости передачи л
 ## Статус и границы
 
 **Foundation / Stage A завершён:** typed runtime settings, async SQLAlchemy session, identity/scope schema, явный Alembic migration с проверкой drift, login с Argon2id и коротким identity-only JWT, проверка active memberships и scoped RBAC, `/health/live`, `/health/ready`, JSON request-correlated logs. Команды пользователя и scoped membership доступны оператору из backend CLI; проверки Foundation и Manifest описаны в [backend README](backend/README.md).
-**Следующие этапы:** бизнес-сценарии передачи, PostgreSQL custody triggers, Celery tasks, offline PWA и dashboards. Пользователи и scoped memberships создаются оператором через `python -m app.cli` из `backend/`; публичного admin API нет.
+**Foundation / Stage A, Manifest / Stage B, Pickup / Stage C и нормальные per-container Delivery и receipt / Stage D реализованы.** Stage D добавляет bilateral Courier/Lab передачу контейнера, отзыв незавершённой попытки, историю и первую ReceivingSession. PostgreSQL guards защищают custody-переходы и согласованность агрегата; подробности запуска и проверок находятся в [backend README](backend/README.md). Stage E добавит ContainerIssue и исключительную приёмку; offline PWA и dashboards остаются последующими этапами. Пользователи и scoped memberships создаются оператором через `python -m app.cli` из `backend/`; публичного admin API нет.
 
 Все данные демонстрационные. Непрозрачные ссылки на ЛИС не гарантируют анонимность в реальном окружении. Перед реальным пилотом нужно отдельно подтвердить юридическую ответственность за физический контейнер, правила offline-разрешения, регламенты медицинской логистики, хранение данных, безопасность и процедуры восстановления.
 
@@ -70,4 +70,4 @@ docker compose down
 
 ## Backend scaffold
 
-В `backend/` находится модульная структура FastAPI, Foundation и Manifest. Версия Python для проекта — 3.12. Установка, миграция и запуск описаны в [backend/README.md](backend/README.md). Этапы custody и offline workflows остаются следующими задачами.
+В `backend/` находится модульная структура FastAPI и этапы Foundation, Manifest, Pickup и нормальная per-container Delivery. Версия Python для проекта — 3.12. Установка, миграция и запуск описаны в [backend/README.md](backend/README.md). ContainerIssue/исключения, обработка результатов пробирок и offline workflows остаются следующими задачами.

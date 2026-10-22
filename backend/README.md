@@ -1,6 +1,6 @@
 # Backend development
 
-The backend is a FastAPI modular monolith. Foundation provides identity and scoped authorization. Manifest adds Samples and opaque external references, a fixed issue-reason catalog, DRAFT Shipments, Containers/items, courier assignment, idempotent writes, audit records, and database-enforced immutability on seal. Pickup, delivery, receipt, and offline sync remain later stages. Operator-controlled user provisioning is available through `python -m app.cli`.
+The backend is a FastAPI modular monolith. Foundation provides identity and scoped authorization. Manifest adds Samples and opaque external references, a fixed issue-reason catalog, DRAFT Shipments, Containers/items, courier assignment, idempotent writes, audit records, and database-enforced immutability on seal. Stage C implements bilateral whole-Shipment Pickup; Stage D implements normal bilateral per-container Delivery, Lab receipt, withdrawal, history, and the first ReceivingSession. ContainerIssue/exceptional receipt, tube-result receiving, and offline sync remain later stages. Operator-controlled user provisioning is available through `python -m app.cli`.
 
 From this directory, create a virtual environment and install the project with development tools:
 

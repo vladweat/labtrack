@@ -1,6 +1,6 @@
 # LabTrack v0.6.1 — API Contracts, Inbox, SLA and Analytics
 
-**Status: FINAL PRODUCT/API REQUIREMENTS for synthetic MVP, 2026-11-01.** Base `/api/v1`, OpenAPI 3.1 design contract. As of 2026-11-02, Foundation, Manifest, and Stage C Pickup endpoints are implemented locally; Delivery/receiving, incidents, offline, Inbox, and analytics remain planned. OPEN-01–04 are approved in [Decision Register](20-decisions-v061.md). This document defines requirements and is not a runtime-status report.
+**Status: FINAL PRODUCT/API REQUIREMENTS for synthetic MVP, 2026-11-01.** Base `/api/v1`, OpenAPI 3.1 design contract. As of 2026-11-02, Foundation, Manifest, Stage C Pickup, and normal Stage D per-container Delivery/receipt endpoints are implemented on the Stage D branch; ContainerIssue/exceptional receipt, incidents, offline, Inbox, and analytics remain planned. OPEN-01–04 are approved in [Decision Register](20-decisions-v061.md). This document defines requirements and is not a runtime-status report.
 
 ## 1. Endpoints to implement (approved design contract)
 
