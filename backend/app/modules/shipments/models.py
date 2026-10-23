@@ -4,6 +4,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -265,3 +266,234 @@ class ReceivingSession(Base):
     closed_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     shipment: Mapped[Shipment] = relationship(back_populates="receiving_sessions")
+
+
+class ContainerIssue(Base):
+    """A reported discrepancy that blocks one transport container."""
+
+    __tablename__ = "container_issues"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["shipment_id", "container_id"],
+            ["transport_containers.shipment_id", "transport_containers.id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("kind IN ('MISSING', 'REJECTED')", name="container_issue_kind"),
+        CheckConstraint("status IN ('OPEN', 'RESOLVED', 'CLOSED_UNDELIVERED')", name="status"),
+        CheckConstraint(
+            "(status='OPEN' AND resolved_by IS NULL AND resolved_at IS NULL "
+            "AND resolution IS NULL) OR "
+            "(status IN ('RESOLVED','CLOSED_UNDELIVERED') AND resolved_by IS NOT NULL "
+            "AND resolved_at IS NOT NULL AND resolution IS NOT NULL)",
+            name="resolution_fields",
+        ),
+        Index("ix_container_issues_shipment_created", "shipment_id", "reported_at"),
+        Index(
+            "uq_container_issue_open",
+            "container_id",
+            unique=True,
+            postgresql_where=text("status = 'OPEN'"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    shipment_id: Mapped[UUID] = mapped_column(
+        ForeignKey("shipments.id", ondelete="RESTRICT"), nullable=False
+    )
+    container_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    reason_code: Mapped[str] = mapped_column(
+        ForeignKey("issue_reason_codes.code", ondelete="RESTRICT"), nullable=False
+    )
+    comment: Mapped[str | None] = mapped_column(String(500))
+    status: Mapped[str] = mapped_column(String(24), nullable=False, server_default=text("'OPEN'"))
+    reported_by: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    reported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    resolved_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolution: Mapped[str | None] = mapped_column(String(24))
+
+
+class ContainerIssueResolutionProposal(Base):
+    """A regional proposal and independent laboratory decision for an issue."""
+
+    __tablename__ = "container_issue_resolution_proposals"
+    __table_args__ = (
+        CheckConstraint("action IN ('RETRY_DELIVERY', 'CLOSE_UNDELIVERED')", name="action"),
+        CheckConstraint(
+            "status IN ('PENDING', 'APPROVED', 'REJECTED', 'WITHDRAWN')", name="status"
+        ),
+        CheckConstraint(
+            "(status='PENDING' AND decided_by IS NULL AND decided_at IS NULL "
+            "AND decision_reason IS NULL AND withdrawn_by IS NULL AND withdrawn_at IS NULL "
+            "AND withdrawal_reason IS NULL) OR "
+            "(status IN ('APPROVED','REJECTED') AND decided_by IS NOT NULL "
+            "AND decided_at IS NOT NULL "
+            "AND proposed_by <> decided_by AND withdrawn_by IS NULL AND withdrawn_at IS NULL "
+            "AND withdrawal_reason IS NULL AND (status <> 'REJECTED' "
+            "OR length(trim(decision_reason)) > 0)) OR "
+            "(status='WITHDRAWN' AND decided_by IS NULL AND decided_at IS NULL "
+            "AND withdrawn_by=proposed_by AND withdrawn_at IS NOT NULL "
+            "AND length(trim(withdrawal_reason)) > 0)",
+            name="transition_fields",
+        ),
+        Index("ix_issue_proposals_issue_created", "issue_id", "proposed_at"),
+        Index(
+            "uq_issue_pending_proposal",
+            "issue_id",
+            unique=True,
+            postgresql_where=text("status = 'PENDING'"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    issue_id: Mapped[UUID] = mapped_column(
+        ForeignKey("container_issues.id", ondelete="RESTRICT"), nullable=False
+    )
+    action: Mapped[str] = mapped_column(String(24), nullable=False)
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'PENDING'")
+    )
+    proposed_by: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    proposed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    decided_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_reason: Mapped[str | None] = mapped_column(String(500))
+    withdrawn_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    withdrawal_reason: Mapped[str | None] = mapped_column(String(500))
+
+
+class CustodyIncident(Base):
+    """Administrative review record, separate from custody handoff actors."""
+
+    __tablename__ = "custody_incidents"
+    __table_args__ = (
+        CheckConstraint("phase IN ('PICKUP', 'DELIVERY')", name="phase"),
+        CheckConstraint(
+            "kind IN ('COURIER_UNAVAILABLE_AFTER_PICKUP', 'PICKUP_UNCONFIRMED', "
+            "'COURIER_DELIVERY_CONFIRMATION_UNAVAILABLE', 'HANDOFF_STALLED', 'OFFLINE_CONFLICT')",
+            name="kind",
+        ),
+        CheckConstraint(
+            "status IN ('OPEN', 'PENDING_EVIDENCE', 'UNDER_REVIEW', 'RESOLVED', 'REJECTED')",
+            name="status",
+        ),
+        CheckConstraint(
+            "(phase='PICKUP' AND container_id IS NULL) OR "
+            "(phase='DELIVERY' AND container_id IS NOT NULL)",
+            name="phase_container_scope",
+        ),
+        CheckConstraint(
+            "(status IN ('OPEN','PENDING_EVIDENCE','UNDER_REVIEW') AND resolved_by IS NULL "
+            "AND resolved_at IS NULL AND resolution IS NULL) OR "
+            "(status IN ('RESOLVED','REJECTED') AND resolved_by IS NOT NULL "
+            "AND resolved_at IS NOT NULL AND resolution IS NOT NULL)",
+            name="resolution_fields",
+        ),
+        ForeignKeyConstraint(
+            ["shipment_id", "container_id"],
+            ["transport_containers.shipment_id", "transport_containers.id"],
+            ondelete="RESTRICT",
+        ),
+        Index("ix_custody_incidents_shipment_opened", "shipment_id", "opened_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    shipment_id: Mapped[UUID] = mapped_column(
+        ForeignKey("shipments.id", ondelete="RESTRICT"), nullable=False
+    )
+    container_id: Mapped[UUID | None] = mapped_column(Uuid)
+    handoff_id: Mapped[UUID | None] = mapped_column(ForeignKey("handoffs.id", ondelete="RESTRICT"))
+    phase: Mapped[str] = mapped_column(String(16), nullable=False)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, server_default=text("'OPEN'"))
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)
+    opened_by: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    resolved_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    resolution: Mapped[str | None] = mapped_column(String(40))
+
+
+class CustodyAttestation(Base):
+    """Append-only first-party custody observation under the actor's active scope."""
+
+    __tablename__ = "custody_attestations"
+    __table_args__ = (
+        UniqueConstraint("incident_id", "user_id", name="uq_custody_attestation_actor"),
+        CheckConstraint("length(trim(statement)) > 0", name="statement_nonblank"),
+        CheckConstraint(
+            "(role_at_time='SENDER_OPERATOR' AND organization_id IS NOT NULL AND "
+            "physically_present IS NULL AND container_code IS NULL) OR "
+            "(role_at_time IN ('LAB_OPERATOR','LAB_MANAGER') AND organization_id IS NOT NULL "
+            "AND physically_present IS TRUE AND container_code IS NOT NULL)",
+            name="role_assertion_fields",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    incident_id: Mapped[UUID] = mapped_column(
+        ForeignKey("custody_incidents.id", ondelete="RESTRICT"), nullable=False
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    organization_id: Mapped[UUID] = mapped_column(
+        ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False
+    )
+    role_at_time: Mapped[str] = mapped_column(String(32), nullable=False)
+    container_code: Mapped[str | None] = mapped_column(String(40))
+    statement: Mapped[str] = mapped_column(String(500), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    physically_present: Mapped[bool | None] = mapped_column(Boolean)
+    physical_release_occurred: Mapped[bool | None] = mapped_column(Boolean)
+    containers_at_origin: Mapped[bool | None] = mapped_column(Boolean)
+
+
+class ContainerReceiptEvidence(Base):
+    """Immutable physical receipt evidence, normal handoff or exceptional review."""
+
+    __tablename__ = "container_receipt_evidence"
+    __table_args__ = (
+        UniqueConstraint("container_id", name="uq_container_receipt_evidence_container_id"),
+        CheckConstraint("method IN ('NORMAL','EXCEPTIONAL')", name="method"),
+        CheckConstraint(
+            "(method='NORMAL' AND confirmed_delivery_handoff_id IS NOT NULL "
+            "AND resolved_incident_id IS NULL) OR "
+            "(method='EXCEPTIONAL' AND confirmed_delivery_handoff_id IS NULL "
+            "AND resolved_incident_id IS NOT NULL)",
+            name="method_reference",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    container_id: Mapped[UUID] = mapped_column(
+        ForeignKey("transport_containers.id", ondelete="RESTRICT"), nullable=False
+    )
+    method: Mapped[str] = mapped_column(String(16), nullable=False)
+    confirmed_delivery_handoff_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("handoffs.id", ondelete="RESTRICT")
+    )
+    resolved_incident_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("custody_incidents.id", ondelete="RESTRICT")
+    )
+    verified_by: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    verified_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

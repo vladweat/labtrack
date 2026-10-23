@@ -1,7 +1,9 @@
 """Shipment and manifest API contracts."""
 
+from __future__ import annotations
+
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
@@ -126,6 +128,239 @@ class DeliveryHandoffHistory(BaseModel):
     items: list[HandoffResponse]
 
 
+class CreateContainerIssueRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    container_id: UUID
+    kind: Literal["MISSING", "REJECTED"]
+    reason_code: str = Field(min_length=1, max_length=80)
+    comment: str | None = Field(default=None, max_length=500)
+
+
+class ContainerIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    shipment_id: UUID
+    container_id: UUID
+    kind: Literal["MISSING", "REJECTED"]
+    reason_code: str
+    comment: str | None
+    status: Literal["OPEN", "RESOLVED", "CLOSED_UNDELIVERED"]
+    reported_by: UUID
+    reported_at: datetime
+    resolved_by: UUID | None
+    resolved_at: datetime | None
+    resolution: Literal["RETRY_DELIVERY", "CLOSE_UNDELIVERED"] | None
+
+
+class CreateContainerIssueResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    issue: ContainerIssue
+    shipment_id: UUID
+    shipment_status: ShipmentStatus
+
+
+class PagedContainerIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[ContainerIssue]
+    total: int
+    limit: int
+    offset: int
+
+
+class CreateContainerResolutionProposalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["RETRY_DELIVERY", "CLOSE_UNDELIVERED"]
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class DecideContainerResolutionProposalApprove(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["APPROVE"]
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class DecideContainerResolutionProposalReject(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["REJECT"]
+    reason: str = Field(min_length=1, max_length=500)
+
+
+DecideContainerResolutionProposalRequest = Annotated[
+    DecideContainerResolutionProposalApprove | DecideContainerResolutionProposalReject,
+    Field(discriminator="decision"),
+]
+
+
+class WithdrawResolutionProposalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class ContainerIssueResolutionProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    issue_id: UUID
+    action: Literal["RETRY_DELIVERY", "CLOSE_UNDELIVERED"]
+    reason: str
+    status: Literal["PENDING", "APPROVED", "REJECTED", "WITHDRAWN"]
+    proposed_by: UUID
+    proposed_at: datetime
+    decided_by: UUID | None
+    decided_at: datetime | None
+    decision_reason: str | None
+    withdrawn_by: UUID | None
+    withdrawn_at: datetime | None
+    withdrawal_reason: str | None
+
+
+class PagedContainerIssueResolutionProposal(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[ContainerIssueResolutionProposal]
+    total: int
+    limit: int
+    offset: int
+
+
+class DecideContainerResolutionProposalResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    proposal: ContainerIssueResolutionProposal
+    issue: ContainerIssue
+    container: TransportContainerResponse
+    shipment: ShipmentResponse
+
+
+class CustodyIncidentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    phase: Literal["PICKUP", "DELIVERY"]
+    kind: Literal[
+        "COURIER_UNAVAILABLE_AFTER_PICKUP",
+        "PICKUP_UNCONFIRMED",
+        "COURIER_DELIVERY_CONFIRMATION_UNAVAILABLE",
+        "HANDOFF_STALLED",
+        "OFFLINE_CONFLICT",
+    ]
+    container_id: UUID | None = None
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class CustodyIncidentResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    shipment_id: UUID
+    container_id: UUID | None
+    handoff_id: UUID | None
+    phase: Literal["PICKUP", "DELIVERY"]
+    kind: Literal[
+        "COURIER_UNAVAILABLE_AFTER_PICKUP",
+        "PICKUP_UNCONFIRMED",
+        "COURIER_DELIVERY_CONFIRMATION_UNAVAILABLE",
+        "HANDOFF_STALLED",
+        "OFFLINE_CONFLICT",
+    ]
+    status: Literal["OPEN", "PENDING_EVIDENCE", "UNDER_REVIEW", "RESOLVED", "REJECTED"]
+    reason: str
+    opened_by: UUID
+    opened_at: datetime
+    resolved_by: UUID | None
+    resolved_at: datetime | None
+    resolution: (
+        Literal[
+            "EXCEPTIONAL_RECEIPT_VERIFIED",
+            "NO_PHYSICAL_TRANSFER",
+            "ESCALATED_NO_CUSTODY_CHANGE",
+            "CONTAINER_ISSUE_REFERRED",
+        ]
+        | None
+    )
+
+
+class PagedCustodyIncident(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[CustodyIncidentResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class CustodyPickupAttestationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    statement: str = Field(min_length=1, max_length=500)
+    physical_release_occurred: bool | None
+    containers_at_origin: bool
+
+
+class CustodyDeliveryAttestationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    container_code: str = Field(min_length=1)
+    statement: str = Field(min_length=1, max_length=500)
+    physically_present: Literal[True]
+
+
+CustodyAttestationRequest = CustodyPickupAttestationRequest | CustodyDeliveryAttestationRequest
+
+
+class CustodyAttestationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    incident_id: UUID
+    user_id: UUID
+    organization_id: UUID
+    role_at_time: str
+    container_code: str | None
+    statement: str
+    recorded_at: datetime
+    physically_present: bool | None
+    physical_release_occurred: bool | None
+    containers_at_origin: bool | None
+
+
+class ExceptionalReceiptRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class CustodyIncidentResolutionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resolution: Literal[
+        "EXCEPTIONAL_RECEIPT_VERIFIED",
+        "NO_PHYSICAL_TRANSFER",
+        "ESCALATED_NO_CUSTODY_CHANGE",
+        "CONTAINER_ISSUE_REFERRED",
+    ]
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class ContainerReceiptEvidenceResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    container_id: UUID
+    method: Literal["NORMAL", "EXCEPTIONAL"]
+    handoff_id: UUID | None
+    incident_id: UUID | None
+    verified_at: datetime
+    verified_by: UUID
+
+
 class ShipmentResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -141,7 +376,7 @@ class ShipmentResponse(BaseModel):
     expected_delivery_at: datetime | None
     sealed_at: datetime | None
     created_at: datetime
-    updated_at: datetime | None
+    updated_at: datetime
     completed_at: datetime | None
     closed_at: datetime | None
     closed_by: UUID | None
@@ -174,15 +409,17 @@ class ContainerResponse(BaseModel):
 
 
 class TransportContainerResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: UUID
     code: str
     shipment_id: UUID
     created_at: datetime
     delivery_status: ContainerStatus
-    received_at: datetime | None = None
-    received_by: UUID | None = None
-    state_version: int = 1
-    receipt_evidence: dict | None = None
+    received_at: datetime | None
+    received_by: UUID | None
+    state_version: int
+    receipt_evidence: ContainerReceiptEvidenceResponse | None
 
 
 class ContainerItemWriteResponse(BaseModel):

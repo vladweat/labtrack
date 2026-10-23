@@ -16,6 +16,7 @@ from app.modules.identity.models import Membership, Organization, Region, User
 from app.modules.samples.models import Sample
 from app.modules.shipments.models import (
     ContainerItem,
+    ContainerReceiptEvidence,
     Handoff,
     ReceivingSession,
     Shipment,
@@ -175,6 +176,20 @@ def handoff_dict(row: Handoff) -> dict:
     }
 
 
+def receipt_evidence_dict(row: ContainerReceiptEvidence) -> dict:
+    return {
+        "id": str(row.id),
+        "container_id": str(row.container_id),
+        "method": row.method,
+        "handoff_id": str(row.confirmed_delivery_handoff_id)
+        if row.confirmed_delivery_handoff_id
+        else None,
+        "incident_id": str(row.resolved_incident_id) if row.resolved_incident_id else None,
+        "verified_at": row.verified_at.isoformat(),
+        "verified_by": str(row.verified_by),
+    }
+
+
 async def pickup_container_codes(session: AsyncSession, shipment_id: UUID) -> list[str]:
     return list(
         await session.scalars(
@@ -300,6 +315,8 @@ async def derive_delivery_shipment_status(session: AsyncSession, shipment_id: UU
         return "RECEIVING"
     if any(status == "RECEIVED" for status in statuses):
         return "PARTIALLY_DELIVERED"
+    if any(status == "UNDELIVERED_CLOSED" for status in statuses):
+        return "DELIVERY_BLOCKED"
     if any(status == "BLOCKED" for status in statuses):
         return "DELIVERY_BLOCKED"
     if any(status == "DELIVERY_PENDING" for status in statuses):
@@ -1128,10 +1145,19 @@ async def lab_confirm_container_receipt(
         handoff.confirmed_by = principal.user_id
         handoff.confirmed_at = now
         await session.flush()
+        evidence = ContainerReceiptEvidence(
+            container_id=container.id,
+            method="NORMAL",
+            confirmed_delivery_handoff_id=handoff.id,
+            verified_by=principal.user_id,
+        )
+        session.add(evidence)
+        await session.flush()
+        await session.refresh(evidence)
         container.delivery_status = "RECEIVED"
         container.received_at = now
         container.received_by = principal.user_id
-        container.receipt_evidence = {"method": "NORMAL", "handoff_id": str(handoff.id)}
+        container.receipt_evidence = receipt_evidence_dict(evidence)
         container.state_version += 1
         await session.flush()
         open_session = await session.scalar(
