@@ -226,7 +226,10 @@ async def test_database_rejects_unconfirmed_direct_pickup_state_changes() -> Non
         await session.rollback()
         with pytest.raises(DBAPIError, match="confirmed Pickup is required before transit"):
             await session.execute(
-                text("UPDATE transport_containers SET delivery_status='IN_TRANSIT' WHERE id=:id"),
+                text(
+                    "UPDATE transport_containers SET delivery_status='IN_TRANSIT', "
+                    "state_version=state_version+1 WHERE id=:id"
+                ),
                 {"id": context["container_id"]},
             )
         await session.rollback()

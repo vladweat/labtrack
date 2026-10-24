@@ -21,9 +21,11 @@ from app.modules.shipments.models import ContainerItem, Shipment, TransportConta
 
 
 def test_delivery_schema_is_an_additive_migration_after_pickup() -> None:
-    config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))
+    backend = Path(__file__).resolve().parents[2]
+    config = Config(str(backend / "alembic.ini"))
+    config.set_main_option("script_location", str(backend / "alembic"))
     head = ScriptDirectory.from_config(config).get_current_head()
-    assert head == "0004_delivery"
+    assert head == "0005_stage_e"
 
 
 async def authorize_lab_operator(shipment_id: str, client: AsyncClient) -> dict[str, str]:
@@ -221,6 +223,34 @@ async def test_delivery_receipt_is_bilateral_partial_and_does_not_set_sample_res
             .where(AuditEvent.resource_id == body["handoff"]["id"])
         )
         assert receipt_events == 2
+        evidence = await session.execute(
+            text(
+                "SELECT method, confirmed_delivery_handoff_id, verified_by "
+                "FROM container_receipt_evidence WHERE container_id=:container_id"
+            ),
+            {"container_id": first_container["id"]},
+        )
+        evidence_row = evidence.one()
+        assert evidence_row.method == "NORMAL"
+        assert str(evidence_row.confirmed_delivery_handoff_id) == body["handoff"]["id"]
+        assert str(evidence_row.verified_by) == body["handoff"]["confirmed_by"]
+        with pytest.raises(DBAPIError):
+            await session.execute(
+                text(
+                    "UPDATE container_receipt_evidence SET verified_by=:actor_id "
+                    "WHERE container_id=:container_id"
+                ),
+                {"actor_id": context["courier_id"], "container_id": first_container["id"]},
+            )
+        await session.rollback()
+        with pytest.raises(DBAPIError):
+            await session.execute(
+                text(
+                    "UPDATE handoffs SET status='SUPERSEDED', superseded_at=now() "
+                    "WHERE id=:handoff_id"
+                ),
+                {"handoff_id": body["handoff"]["id"]},
+            )
 
 
 @pytest.mark.asyncio
@@ -351,7 +381,9 @@ async def test_database_rejects_direct_receipt_without_a_confirmed_delivery() ->
         await confirm_pickup(context, client)
 
     async with get_session_factory()() as session:
-        with pytest.raises(DBAPIError, match="Invalid container custody transition"):
+        with pytest.raises(
+            DBAPIError, match="Container receipt requires verified normal or exceptional evidence"
+        ):
             await session.execute(
                 text(
                     "UPDATE transport_containers SET delivery_status='RECEIVED', "
