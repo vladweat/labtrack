@@ -5660,6 +5660,27 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
           }
         ],
         "responses": {
@@ -8623,6 +8644,7 @@
               "PICKUP_PENDING",
               "IN_TRANSIT",
               "DELIVERY_PENDING",
+              "PARTIALLY_DELIVERED",
               "RECEIVING",
               "COMPLETED",
               "COMPLETED_WITH_ISSUES",
@@ -9895,7 +9917,11 @@
             "description": "Recorded from active membership by server; user-supplied role/identity is ignored."
           },
           "container_code": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Null for Pickup attestations, where a container does not apply."
           },
           "statement": {
             "type": "string",

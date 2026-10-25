@@ -1,6 +1,6 @@
 # LabTrack v0.6.1 — PostgreSQL Delta & Integrity Rules
 
-**Status:** This remains the design for the full v0.6.1 database delta. Alembic revisions `0001_foundation_identity` through `0004_delivery` implement Stages A–D, including normal per-container Delivery, receipt metadata, and the first `ReceivingSession`. ContainerIssue, exceptional receipt, incidents, offline, and other proposed schema changes below remain design, not executable migrations. Build on [v0.6 relational model](17-data-model-v06.md); preserve Shipment-first locking, partially delivered receiving, and sealed manifest triggers. User-approved changes: [20-decisions-v061.md](20-decisions-v061.md).
+**Status:** Alembic revisions `0001_foundation_identity` through `0005_stage_e` implement Stages A–E, including ContainerIssue proposals, custody incidents and attestations, and NORMAL/EXCEPTIONAL receipt evidence. Offline, Inbox, analytics, and other unimplemented v0.6.1 schema changes below remain design. Build on [v0.6 relational model](17-data-model-v06.md); preserve Shipment-first locking, partially delivered receiving, and sealed manifest triggers. User-approved changes: [20-decisions-v061.md](20-decisions-v061.md).
 
 ## 1. New tables (proposed physical mapping)
 
@@ -107,4 +107,4 @@ Checks: receipt evidence XOR normal_handoff_id/incident_id; immutable evidence; 
 7. Add incident/evidence models with **approved witness/pickup/role guards** and unit + PostgreSQL tests; feature flag may be used for controlled rollout but no product sign-off remains pending.
 8. Apply real Alembic migrations against PostgreSQL, validate upgrade and rollback/forward on disposable DB; test row-level security boundaries at application layer.
 
-**No actual migrations or tests are claimed.**
+Stage E's schema and guards are implemented in `0005_stage_e` and passed the PostgreSQL migration cycle and backend acceptance suite. Remaining migration items in this design—including offline command tombstones and Inbox tables—are not claimed as implemented.
