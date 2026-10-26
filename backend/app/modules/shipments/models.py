@@ -497,3 +497,44 @@ class ContainerReceiptEvidence(Base):
     verified_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class ReceiptRevision(Base):
+    """Append-only record of a Sample receipt classification change."""
+
+    __tablename__ = "receipt_revisions"
+    __table_args__ = (
+        CheckConstraint(
+            "old_result IS NULL OR old_result IN ('ACCEPTED', 'MISSING', 'REJECTED')",
+            name="old_result",
+        ),
+        CheckConstraint(
+            "new_result IN ('ACCEPTED', 'MISSING', 'REJECTED')",
+            name="new_result",
+        ),
+        Index("ix_receipt_revisions_item_changed_at", "container_item_id", "changed_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    receiving_session_id: Mapped[UUID] = mapped_column(
+        ForeignKey("receiving_sessions.id", ondelete="RESTRICT"), nullable=False
+    )
+    container_item_id: Mapped[UUID] = mapped_column(
+        ForeignKey("container_items.id", ondelete="RESTRICT"), nullable=False
+    )
+    old_result: Mapped[str | None] = mapped_column(String(16))
+    new_result: Mapped[str] = mapped_column(String(16), nullable=False)
+    old_reason_code: Mapped[str | None] = mapped_column(
+        ForeignKey("issue_reason_codes.code", ondelete="RESTRICT")
+    )
+    new_reason_code: Mapped[str | None] = mapped_column(
+        ForeignKey("issue_reason_codes.code", ondelete="RESTRICT")
+    )
+    old_comment: Mapped[str | None] = mapped_column(String(1000))
+    new_comment: Mapped[str | None] = mapped_column(String(1000))
+    changed_by: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
