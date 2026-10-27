@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, RootModel, field_validator
 
 ShipmentStatus = Literal[
     "DRAFT",
@@ -422,7 +422,9 @@ class TransportContainerResponse(BaseModel):
     receipt_evidence: ContainerReceiptEvidenceResponse | None
 
 
-class ContainerItemWriteResponse(BaseModel):
+class ContainerItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     id: UUID
     container_id: UUID
     sample_id: UUID
@@ -432,9 +434,86 @@ class ContainerItemWriteResponse(BaseModel):
     receipt_comment: str | None = None
 
 
+ContainerItemWriteResponse = ContainerItem
+
+
 class ManifestResponse(BaseModel):
     shipment_id: UUID
     status: ShipmentStatus
     sealed_at: datetime | None
     manifest_revision: int
     containers: list[ContainerResponse]
+
+
+class AcceptedReceiptResultRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    result: Literal["ACCEPTED"]
+    reason_code: None = None
+    comment: None = None
+
+
+class MissingReceiptResultRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    result: Literal["MISSING"]
+    reason_code: str = Field(min_length=1, max_length=80)
+    comment: str | None = Field(default=None, max_length=500)
+
+
+class RejectedReceiptResultRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    result: Literal["REJECTED"]
+    reason_code: str = Field(min_length=1, max_length=80)
+    comment: str | None = Field(default=None, max_length=500)
+
+
+ReceiptResultRequestUnion = Annotated[
+    AcceptedReceiptResultRequest | MissingReceiptResultRequest | RejectedReceiptResultRequest,
+    Field(discriminator="result"),
+]
+
+
+class ReceiptResultRequest(RootModel[ReceiptResultRequestUnion]):
+    pass
+
+
+class ReceivingSession(BaseModel):
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
+    id: UUID
+    shipment_id: UUID
+    sequence: int = Field(ge=1)
+    status: Literal["OPEN", "CLOSED"]
+    opened_by: UUID
+    opened_at: datetime
+    reopen_reason: str | None
+    closed_by: UUID | None
+    closed_at: datetime | None
+
+
+class ReceiptRevision(BaseModel):
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
+
+    id: UUID
+    receiving_session_id: UUID
+    container_item_id: UUID
+    old_result: Literal["ACCEPTED", "MISSING", "REJECTED"] | None
+    new_result: Literal["ACCEPTED", "MISSING", "REJECTED"]
+    old_reason_code: str | None
+    new_reason_code: str | None
+    old_comment: str | None
+    new_comment: str | None
+    changed_by: UUID
+    changed_at: datetime
+
+
+class ReceivingHistory(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sessions: list[ReceivingSession]
+    revisions: list[ReceiptRevision]
+    total_revisions: int = Field(ge=0)
+    limit: int = Field(ge=1, le=100)
+    offset: int = Field(ge=0)
