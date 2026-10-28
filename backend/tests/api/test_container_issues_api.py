@@ -22,10 +22,11 @@ def test_stage_e_migration_is_additive_after_delivery() -> None:
     config = Config(str(backend / "alembic.ini"))
     config.set_main_option("script_location", str(backend / "alembic"))
     script = ScriptDirectory.from_config(config)
-    revision = script.get_revision(script.get_current_head())
+    head_revision = script.get_revision(script.get_current_head())
+    stage_e_revision = script.get_revision("0005_stage_e")
 
-    assert revision.revision == "0005_stage_e"
-    assert revision.down_revision == "0004_delivery"
+    assert head_revision.revision == "0007_stage_f_lifecycle"
+    assert stage_e_revision.down_revision == "0004_delivery"
 
 
 @pytest.mark.asyncio

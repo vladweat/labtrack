@@ -25,7 +25,7 @@ def test_delivery_schema_is_an_additive_migration_after_pickup() -> None:
     config = Config(str(backend / "alembic.ini"))
     config.set_main_option("script_location", str(backend / "alembic"))
     head = ScriptDirectory.from_config(config).get_current_head()
-    assert head == "0005_stage_e"
+    assert head == "0007_stage_f_lifecycle"
 
 
 async def authorize_lab_operator(shipment_id: str, client: AsyncClient) -> dict[str, str]:

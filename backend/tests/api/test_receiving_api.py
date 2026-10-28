@@ -1,5 +1,6 @@
 """Receipt revision persistence and PostgreSQL receiving guards."""
 
+import asyncio
 from pathlib import Path
 from uuid import uuid4
 
@@ -16,16 +17,25 @@ from test_container_issues_api import (
     create_issue,
 )
 from test_delivery_api import authorize_lab_operator, confirm_pickup
-from test_pickup_api import create_pickup_fixture
+from test_pickup_api import PASSWORD, create_pickup_fixture
 
 from app.core.config import get_settings
+from app.core.security import hash_password
 from app.db.base import Base
 from app.db.session import get_session_factory
 from app.main import app
 from app.modules.audit.models import AuditEvent
 from app.modules.idempotency.models import IdempotencyRecord
-from app.modules.identity.models import Membership
-from app.modules.shipments.models import ContainerItem, ReceiptRevision, Shipment
+from app.modules.identity.models import Membership, Organization, User
+from app.modules.shipments.models import (
+    ContainerItem,
+    ReceiptRevision,
+    Shipment,
+    TransportContainer,
+)
+from app.modules.shipments.models import (
+    ReceivingSession as ReceivingSessionModel,
+)
 
 RECEIPT_GUARD_ERROR = (
     "Receipt result requires a received container with verified receipt evidence "
@@ -41,8 +51,8 @@ def test_stage_f_migration_is_additive_after_stage_e() -> None:
     head = script.get_current_head()
     revision = script.get_revision(head)
 
-    assert revision.revision == "0006_stage_f"
-    assert revision.down_revision == "0005_stage_e"
+    assert revision.revision == "0007_stage_f_lifecycle"
+    assert revision.down_revision == "0006_stage_f"
 
 
 async def receive_container(
@@ -106,6 +116,139 @@ async def patch_receipt(
         headers={**authorization, "Idempotency-Key": key},
         json=payload,
     )
+
+
+def complete_receiving_url(context: dict) -> str:
+    return f"/api/v1/shipments/{context['shipment_id']}/receiving/complete"
+
+
+def reopen_receiving_url(context: dict) -> str:
+    return f"/api/v1/shipments/{context['shipment_id']}/receiving/reopen"
+
+
+async def complete_receiving(
+    client: AsyncClient,
+    context: dict,
+    authorization: dict[str, str],
+    key: str,
+):
+    return await client.post(
+        complete_receiving_url(context),
+        headers={**authorization, "Idempotency-Key": key},
+        json={},
+    )
+
+
+async def reopen_receiving(
+    client: AsyncClient,
+    context: dict,
+    authorization: dict[str, str],
+    key: str,
+    reason: str = "Correct a receiving classification",
+):
+    return await client.post(
+        reopen_receiving_url(context),
+        headers={**authorization, "Idempotency-Key": key},
+        json={"reason": reason},
+    )
+
+
+async def receive_all_containers(context: dict, client: AsyncClient) -> dict[str, str]:
+    await confirm_pickup(context, client)
+    lab_auth = await authorize_lab_operator(context["shipment_id"], client)
+    for container in context["containers"]:
+        await receive_container(context, client, container, lab_auth)
+    return lab_auth
+
+
+async def record_result(
+    client: AsyncClient,
+    context: dict,
+    authorization: dict[str, str],
+    container: dict,
+    result: dict,
+    key: str,
+) -> str:
+    item_id = await item_id_for_container(container["id"])
+    response = await patch_receipt(client, context, item_id, authorization, result, key)
+    assert response.status_code == 200, response.text
+    return item_id
+
+
+async def close_container_undelivered(
+    context: dict,
+    client: AsyncClient,
+    container: dict,
+    manager_auth: dict[str, str] | None = None,
+) -> dict[str, str]:
+    issue_context = {
+        **context,
+        "container_id": container["id"],
+        "container_code": container["code"],
+    }
+    issue = await create_issue(issue_context, client)
+    async with get_session_factory()() as session:
+        shipment = await session.get(Shipment, context["shipment_id"])
+        assert shipment is not None
+        region_id = str(shipment.region_id)
+    regional_auth = await authorize_regional_operator(region_id, client)
+    if manager_auth is None:
+        manager_auth = await authorize_lab_manager(context["shipment_id"], client)
+    proposals_url = (
+        f"/api/v1/shipments/{context['shipment_id']}/container-issues/{issue['id']}/proposals"
+    )
+    proposed = await client.post(
+        proposals_url,
+        headers={
+            **regional_auth,
+            "Idempotency-Key": f"receiving-close-proposal-{context['suffix']}",
+        },
+        json={"action": "CLOSE_UNDELIVERED", "reason": "Courier cannot return"},
+    )
+    assert proposed.status_code == 201, proposed.text
+    decided = await client.post(
+        f"{proposals_url}/{proposed.json()['id']}/decide",
+        headers={
+            **manager_auth,
+            "Idempotency-Key": f"receiving-close-approve-{context['suffix']}",
+        },
+        json={"decision": "APPROVE"},
+    )
+    assert decided.status_code == 200, decided.text
+    assert decided.json()["container"]["delivery_status"] == "UNDELIVERED_CLOSED"
+    return manager_auth
+
+
+async def create_wrong_scope_lab_manager(shipment_id: str, client: AsyncClient) -> dict[str, str]:
+    suffix = uuid4().hex[:10]
+    async with get_session_factory()() as session:
+        shipment = await session.get(Shipment, shipment_id)
+        assert shipment is not None
+        other_lab = Organization(
+            region_id=shipment.region_id,
+            code=f"OTHER-LAB-{suffix}",
+            name="Other laboratory",
+            organization_type="LABORATORY",
+        )
+        manager = User(
+            email=f"wrong-scope-manager-{suffix}@example.test",
+            display_name="Wrong Scope Lab Manager",
+            password_hash=hash_password(PASSWORD),
+        )
+        session.add_all([other_lab, manager])
+        await session.flush()
+        session.add(
+            Membership(
+                user_id=manager.id,
+                organization_id=other_lab.id,
+                role="LAB_MANAGER",
+            )
+        )
+        await session.commit()
+        email = manager.email
+    login = await client.post("/api/v1/auth/token", json={"email": email, "password": PASSWORD})
+    assert login.status_code == 200, login.text
+    return {"Authorization": f"Bearer {login.json()['access_token']}"}
 
 
 @pytest.mark.asyncio
@@ -589,7 +732,6 @@ async def test_record_receipt_rejects_closed_session() -> None:
                         "shipment_id": context["shipment_id"],
                     },
                 )
-            async with owner_engine.begin() as connection:
                 await connection.execute(
                     text(
                         "ALTER TABLE receiving_sessions ENABLE TRIGGER "
@@ -859,3 +1001,932 @@ async def test_receiving_history_is_ordered_paginated_and_scoped_to_sender_and_l
     assert [row["new_result"] for row in next_page.json()["revisions"]] == ["ACCEPTED"]
     assert [row["sequence"] for row in lab_page.json()["sessions"]] == [1]
     assert courier_page.status_code == regional_page.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_all_accepted_results_complete_and_replay_atomically() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client, container_count=2)
+        lab_auth = await receive_all_containers(context, client)
+        for index, container in enumerate(context["containers"]):
+            await record_result(
+                client,
+                context,
+                lab_auth,
+                container,
+                {"result": "ACCEPTED"},
+                f"complete-accepted-result-{context['suffix']}-{index}",
+            )
+
+        async with get_session_factory()() as session:
+            shipment_before = await session.get(Shipment, context["shipment_id"])
+            assert shipment_before is not None
+            version_before = shipment_before.version
+            container_states_before = list(
+                await session.execute(
+                    select(
+                        TransportContainer.id,
+                        TransportContainer.delivery_status,
+                        TransportContainer.state_version,
+                        TransportContainer.received_at,
+                        TransportContainer.received_by,
+                        TransportContainer.receipt_evidence,
+                    ).where(TransportContainer.shipment_id == context["shipment_id"])
+                )
+            )
+
+        key = f"receiving-complete-accepted-{context['suffix']}"
+        completed = await complete_receiving(client, context, lab_auth, key)
+        replay = await complete_receiving(client, context, lab_auth, key)
+
+    assert completed.status_code == replay.status_code == 200
+    assert replay.json() == completed.json()
+    assert completed.json()["status"] == "COMPLETED"
+    assert completed.json()["version"] == version_before + 1
+    operation = f"shipments.{context['shipment_id']}.receiving.complete"
+    async with get_session_factory()() as session:
+        shipment = await session.get(Shipment, context["shipment_id"])
+        assert shipment is not None and shipment.status == "COMPLETED"
+        receiving_sessions = list(
+            await session.scalars(
+                select(ReceivingSessionModel).where(
+                    ReceivingSessionModel.shipment_id == context["shipment_id"]
+                )
+            )
+        )
+        assert len(receiving_sessions) == 1
+        assert receiving_sessions[0].status == "CLOSED"
+        container_states_after = list(
+            await session.execute(
+                select(
+                    TransportContainer.id,
+                    TransportContainer.delivery_status,
+                    TransportContainer.state_version,
+                    TransportContainer.received_at,
+                    TransportContainer.received_by,
+                    TransportContainer.receipt_evidence,
+                ).where(TransportContainer.shipment_id == context["shipment_id"])
+            )
+        )
+        assert container_states_after == container_states_before
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(AuditEvent)
+                .where(
+                    AuditEvent.operation == operation,
+                    AuditEvent.resource_id == context["shipment_id"],
+                    AuditEvent.request_key == key,
+                )
+            )
+            == 1
+        )
+        record = await session.scalar(
+            select(IdempotencyRecord).where(
+                IdempotencyRecord.operation == operation,
+                IdempotencyRecord.key == key,
+            )
+        )
+        assert record is not None and record.response_status == 200
+        assert record.response_body["id"] == completed.json()["id"]
+        assert record.response_body["status"] == completed.json()["status"]
+        assert record.response_body["version"] == completed.json()["version"]
+
+
+@pytest.mark.asyncio
+async def test_mixed_results_complete_with_issues() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client, container_count=2)
+        lab_auth = await receive_all_containers(context, client)
+        await record_result(
+            client,
+            context,
+            lab_auth,
+            context["containers"][0],
+            {"result": "ACCEPTED"},
+            f"complete-mixed-accepted-{context['suffix']}",
+        )
+        await record_result(
+            client,
+            context,
+            lab_auth,
+            context["containers"][1],
+            {
+                "result": "MISSING",
+                "reason_code": "SAMPLE_NOT_FOUND",
+                "comment": "Sample was not present",
+            },
+            f"complete-mixed-missing-{context['suffix']}",
+        )
+        completed = await complete_receiving(
+            client,
+            context,
+            lab_auth,
+            f"receiving-complete-mixed-{context['suffix']}",
+        )
+
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["status"] == "COMPLETED_WITH_ISSUES"
+    async with get_session_factory()() as session:
+        receiving_session = await session.scalar(
+            select(ReceivingSessionModel).where(
+                ReceivingSessionModel.shipment_id == context["shipment_id"]
+            )
+        )
+        assert receiving_session is not None and receiving_session.status == "CLOSED"
+
+
+@pytest.mark.asyncio
+async def test_received_plus_undelivered_completes_with_null_results() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client, container_count=2)
+        await confirm_pickup(context, client)
+        lab_auth = await authorize_lab_operator(context["shipment_id"], client)
+        received_container = context["containers"][0]
+        undelivered_container = context["containers"][1]
+        await receive_container(context, client, received_container, lab_auth)
+        await close_container_undelivered(context, client, undelivered_container)
+        await record_result(
+            client,
+            context,
+            lab_auth,
+            received_container,
+            {"result": "ACCEPTED"},
+            f"complete-partial-result-{context['suffix']}",
+        )
+        completed = await complete_receiving(
+            client,
+            context,
+            lab_auth,
+            f"receiving-complete-partial-{context['suffix']}",
+        )
+
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["status"] == "COMPLETED_WITH_ISSUES"
+    async with get_session_factory()() as session:
+        containers = list(
+            await session.scalars(
+                select(TransportContainer).where(
+                    TransportContainer.shipment_id == context["shipment_id"]
+                )
+            )
+        )
+        undelivered = next(
+            container
+            for container in containers
+            if str(container.id) == undelivered_container["id"]
+        )
+        assert undelivered.delivery_status == "UNDELIVERED_CLOSED"
+        outcomes = list(
+            await session.scalars(
+                select(ContainerItem).where(ContainerItem.container_id == undelivered.id)
+            )
+        )
+        assert len(outcomes) == 1
+        assert outcomes[0].receipt_result is None
+        assert outcomes[0].receipt_recorded_at is None
+        assert outcomes[0].receipt_reason_code is None
+        assert outcomes[0].receipt_comment is None
+
+
+@pytest.mark.asyncio
+async def test_completion_rejects_unresolved_container_without_partial_effects() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client, container_count=2)
+        await confirm_pickup(context, client)
+        lab_auth = await authorize_lab_operator(context["shipment_id"], client)
+        await receive_container(context, client, context["containers"][0], lab_auth)
+        await record_result(
+            client,
+            context,
+            lab_auth,
+            context["containers"][0],
+            {"result": "ACCEPTED"},
+            f"complete-unresolved-result-{context['suffix']}",
+        )
+        response = await complete_receiving(
+            client,
+            context,
+            lab_auth,
+            f"receiving-complete-unresolved-{context['suffix']}",
+        )
+
+    assert response.status_code == 409, response.text
+    operation = f"shipments.{context['shipment_id']}.receiving.complete"
+    async with get_session_factory()() as session:
+        shipment = await session.get(Shipment, context["shipment_id"])
+        assert shipment is not None and shipment.status == "PARTIALLY_DELIVERED"
+        receiving_session = await session.scalar(
+            select(ReceivingSessionModel).where(
+                ReceivingSessionModel.shipment_id == context["shipment_id"]
+            )
+        )
+        assert receiving_session is not None and receiving_session.status == "OPEN"
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(AuditEvent)
+                .where(AuditEvent.operation == operation)
+            )
+            == 0
+        )
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(IdempotencyRecord)
+                .where(IdempotencyRecord.operation == operation)
+            )
+            == 0
+        )
+
+
+@pytest.mark.asyncio
+async def test_completion_rejects_missing_received_item_result_without_partial_effects() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        lab_auth = await receive_first_container(context, client)
+        response = await complete_receiving(
+            client,
+            context,
+            lab_auth,
+            f"receiving-complete-missing-result-{context['suffix']}",
+        )
+
+    assert response.status_code == 409, response.text
+    operation = f"shipments.{context['shipment_id']}.receiving.complete"
+    async with get_session_factory()() as session:
+        shipment = await session.get(Shipment, context["shipment_id"])
+        assert shipment is not None and shipment.status == "RECEIVING"
+        receiving_session = await session.scalar(
+            select(ReceivingSessionModel).where(
+                ReceivingSessionModel.shipment_id == context["shipment_id"]
+            )
+        )
+        assert receiving_session is not None and receiving_session.status == "OPEN"
+        item = await session.scalar(
+            select(ContainerItem).where(ContainerItem.container_id == context["container_id"])
+        )
+        assert item is not None and item.receipt_result is None
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(IdempotencyRecord)
+                .where(IdempotencyRecord.operation == operation)
+            )
+            == 0
+        )
+
+
+@pytest.mark.asyncio
+async def test_all_undelivered_shipment_stays_closed_and_cannot_complete_or_reopen() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        await confirm_pickup(context, client)
+        manager_auth = await close_container_undelivered(context, client, context["containers"][0])
+        lab_auth = await authorize_lab_operator(context["shipment_id"], client)
+        complete = await complete_receiving(
+            client,
+            context,
+            lab_auth,
+            f"receiving-complete-undelivered-{context['suffix']}",
+        )
+        reopen = await reopen_receiving(
+            client,
+            context,
+            manager_auth,
+            f"receiving-reopen-undelivered-{context['suffix']}",
+        )
+
+    assert complete.status_code == reopen.status_code == 409
+    async with get_session_factory()() as session:
+        shipment = await session.get(Shipment, context["shipment_id"])
+        assert shipment is not None and shipment.status == "CLOSED_UNDELIVERED"
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(ReceivingSessionModel)
+                .where(ReceivingSessionModel.shipment_id == context["shipment_id"])
+            )
+            == 0
+        )
+
+
+@pytest.mark.asyncio
+async def test_manager_reopen_preserves_history_and_custody_then_recalculates_completion() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        lab_auth = await receive_first_container(context, client)
+        item_id = await record_result(
+            client,
+            context,
+            lab_auth,
+            context["containers"][0],
+            {
+                "result": "MISSING",
+                "reason_code": "SAMPLE_NOT_FOUND",
+                "comment": "Sample was not present",
+            },
+            f"reopen-original-result-{context['suffix']}",
+        )
+        initial_completion = await complete_receiving(
+            client,
+            context,
+            lab_auth,
+            f"receiving-initial-complete-{context['suffix']}",
+        )
+        assert initial_completion.status_code == 200, initial_completion.text
+        assert initial_completion.json()["status"] == "COMPLETED_WITH_ISSUES"
+        manager_auth = await authorize_lab_manager(context["shipment_id"], client)
+        reopened = await reopen_receiving(
+            client,
+            context,
+            manager_auth,
+            f"receiving-reopen-valid-{context['suffix']}",
+            reason="  Recheck approved sample details  ",
+        )
+        assert reopened.status_code == 200, reopened.text
+        assert reopened.json()["status"] == "RECEIVING"
+
+        async with get_session_factory()() as session:
+            item = await session.get(ContainerItem, item_id)
+            receiving_sessions = list(
+                await session.scalars(
+                    select(ReceivingSessionModel)
+                    .where(ReceivingSessionModel.shipment_id == context["shipment_id"])
+                    .order_by(ReceivingSessionModel.sequence)
+                )
+            )
+            revisions = list(
+                await session.scalars(
+                    select(ReceiptRevision).where(ReceiptRevision.container_item_id == item_id)
+                )
+            )
+            container = await session.get(TransportContainer, context["container_id"])
+            assert item is not None and item.receipt_result == "MISSING"
+            assert len(receiving_sessions) == 2
+            assert [row.sequence for row in receiving_sessions] == [1, 2]
+            assert [row.status for row in receiving_sessions] == ["CLOSED", "OPEN"]
+            assert receiving_sessions[1].reopen_reason == "Recheck approved sample details"
+            assert len(revisions) == 1
+            assert revisions[0].receiving_session_id == receiving_sessions[0].id
+            assert container is not None and container.delivery_status == "RECEIVED"
+            container_state_version = container.state_version
+            received_at = container.received_at
+            received_by = container.received_by
+            receipt_evidence = container.receipt_evidence
+
+        correction = await patch_receipt(
+            client,
+            context,
+            item_id,
+            lab_auth,
+            {"result": "ACCEPTED"},
+            f"reopen-correct-result-{context['suffix']}",
+        )
+        assert correction.status_code == 200, correction.text
+        final_completion = await complete_receiving(
+            client,
+            context,
+            lab_auth,
+            f"receiving-recomplete-{context['suffix']}",
+        )
+        assert final_completion.status_code == 200, final_completion.text
+        assert final_completion.json()["status"] == "COMPLETED"
+
+    async with get_session_factory()() as session:
+        item = await session.get(ContainerItem, item_id)
+        receiving_sessions = list(
+            await session.scalars(
+                select(ReceivingSessionModel)
+                .where(ReceivingSessionModel.shipment_id == context["shipment_id"])
+                .order_by(ReceivingSessionModel.sequence)
+            )
+        )
+        revisions = list(
+            await session.scalars(
+                select(ReceiptRevision).where(ReceiptRevision.container_item_id == item_id)
+            )
+        )
+        container = await session.get(TransportContainer, context["container_id"])
+        assert item is not None and item.receipt_result == "ACCEPTED"
+        assert len(receiving_sessions) == 2
+        assert [row.sequence for row in receiving_sessions] == [1, 2]
+        assert [row.status for row in receiving_sessions] == ["CLOSED", "CLOSED"]
+        assert len(revisions) == 2
+        assert revisions[1].receiving_session_id == receiving_sessions[1].id
+        assert container is not None and container.delivery_status == "RECEIVED"
+        assert container.state_version == container_state_version
+        assert container.received_at == received_at
+        assert container.received_by == received_by
+        assert container.receipt_evidence == receipt_evidence
+
+    async with get_session_factory()() as session:
+        receiving_sessions = list(
+            await session.scalars(
+                select(ReceivingSessionModel)
+                .where(ReceivingSessionModel.shipment_id == context["shipment_id"])
+                .order_by(ReceivingSessionModel.sequence)
+            )
+        )
+        revisions = list(
+            await session.scalars(
+                select(ReceiptRevision).where(ReceiptRevision.container_item_id == item_id)
+            )
+        )
+        container = await session.get(TransportContainer, context["container_id"])
+        assert [row.status for row in receiving_sessions] == ["CLOSED", "CLOSED"]
+        assert len(revisions) == 2
+        assert revisions[1].receiving_session_id == receiving_sessions[1].id
+        assert container is not None and container.delivery_status == "RECEIVED"
+        assert container.state_version == container_state_version
+        assert container.received_at == received_at
+        assert container.received_by == received_by
+        assert container.receipt_evidence == receipt_evidence
+
+
+@pytest.mark.asyncio
+async def test_reopen_requires_active_destination_lab_manager_and_reason() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        lab_auth = await receive_first_container(context, client)
+        await record_result(
+            client,
+            context,
+            lab_auth,
+            context["containers"][0],
+            {"result": "ACCEPTED"},
+            f"reopen-auth-result-{context['suffix']}",
+        )
+        completed = await complete_receiving(
+            client,
+            context,
+            lab_auth,
+            f"receiving-reopen-auth-complete-{context['suffix']}",
+        )
+        assert completed.status_code == 200, completed.text
+        manager_auth = await authorize_lab_manager(context["shipment_id"], client)
+        unauthorized = await reopen_receiving(
+            client,
+            context,
+            context["sender_auth"],
+            f"receiving-reopen-unauthorized-{context['suffix']}",
+        )
+        wrong_scope_auth = await create_wrong_scope_lab_manager(context["shipment_id"], client)
+        wrong_scope = await reopen_receiving(
+            client,
+            context,
+            wrong_scope_auth,
+            f"receiving-reopen-wrong-scope-{context['suffix']}",
+        )
+        missing_reason = await client.post(
+            reopen_receiving_url(context),
+            headers={
+                **manager_auth,
+                "Idempotency-Key": f"receiving-reopen-missing-reason-{context['suffix']}",
+            },
+            json={},
+        )
+        async with get_session_factory()() as session:
+            shipment = await session.get(Shipment, context["shipment_id"])
+            assert shipment is not None
+            membership = await session.scalar(
+                select(Membership).where(
+                    Membership.organization_id == shipment.destination_organization_id,
+                    Membership.role == "LAB_MANAGER",
+                )
+            )
+            assert membership is not None
+            membership.is_active = False
+            await session.commit()
+        inactive_membership = await reopen_receiving(
+            client,
+            context,
+            manager_auth,
+            f"receiving-reopen-inactive-{context['suffix']}",
+        )
+
+    assert unauthorized.status_code == wrong_scope.status_code == 404
+    assert missing_reason.status_code == 422
+    assert inactive_membership.status_code == 404
+    async with get_session_factory()() as session:
+        shipment = await session.get(Shipment, context["shipment_id"])
+        assert shipment is not None and shipment.status == "COMPLETED"
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(ReceivingSessionModel)
+                .where(ReceivingSessionModel.shipment_id == context["shipment_id"])
+            )
+            == 1
+        )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_completion_serializes_on_shipment_and_only_one_transition_wins() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        lab_auth = await receive_first_container(context, client)
+        await record_result(
+            client,
+            context,
+            lab_auth,
+            context["containers"][0],
+            {"result": "ACCEPTED"},
+            f"complete-concurrent-result-{context['suffix']}",
+        )
+        first, second = await asyncio.gather(
+            complete_receiving(
+                client,
+                context,
+                lab_auth,
+                f"receiving-complete-concurrent-a-{context['suffix']}",
+            ),
+            complete_receiving(
+                client,
+                context,
+                lab_auth,
+                f"receiving-complete-concurrent-b-{context['suffix']}",
+            ),
+        )
+
+    assert sorted([first.status_code, second.status_code]) == [200, 409]
+    operation = f"shipments.{context['shipment_id']}.receiving.complete"
+    async with get_session_factory()() as session:
+        shipment = await session.get(Shipment, context["shipment_id"])
+        assert shipment is not None and shipment.status == "COMPLETED"
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(ReceivingSessionModel)
+                .where(
+                    ReceivingSessionModel.shipment_id == context["shipment_id"],
+                    ReceivingSessionModel.status == "CLOSED",
+                )
+            )
+            == 1
+        )
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(AuditEvent)
+                .where(AuditEvent.operation == operation)
+            )
+            == 1
+        )
+
+
+@pytest.mark.asyncio
+async def test_concurrent_reopen_creates_only_one_next_session() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        lab_auth = await receive_first_container(context, client)
+        await record_result(
+            client,
+            context,
+            lab_auth,
+            context["containers"][0],
+            {"result": "ACCEPTED"},
+            f"reopen-concurrent-result-{context['suffix']}",
+        )
+        completed = await complete_receiving(
+            client,
+            context,
+            lab_auth,
+            f"receiving-reopen-concurrent-complete-{context['suffix']}",
+        )
+        assert completed.status_code == 200, completed.text
+        manager_auth = await authorize_lab_manager(context["shipment_id"], client)
+        first, second = await asyncio.gather(
+            reopen_receiving(
+                client,
+                context,
+                manager_auth,
+                f"receiving-reopen-concurrent-a-{context['suffix']}",
+                reason="First concurrent reopen",
+            ),
+            reopen_receiving(
+                client,
+                context,
+                manager_auth,
+                f"receiving-reopen-concurrent-b-{context['suffix']}",
+                reason="Second concurrent reopen",
+            ),
+        )
+
+    assert sorted([first.status_code, second.status_code]) == [200, 409]
+    operation = f"shipments.{context['shipment_id']}.receiving.reopen"
+    async with get_session_factory()() as session:
+        shipment = await session.get(Shipment, context["shipment_id"])
+        assert shipment is not None and shipment.status == "RECEIVING"
+        receiving_sessions = list(
+            await session.scalars(
+                select(ReceivingSessionModel)
+                .where(ReceivingSessionModel.shipment_id == context["shipment_id"])
+                .order_by(ReceivingSessionModel.sequence)
+            )
+        )
+        assert [row.sequence for row in receiving_sessions] == [1, 2]
+        assert [row.status for row in receiving_sessions] == ["CLOSED", "OPEN"]
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(AuditEvent)
+                .where(AuditEvent.operation == operation)
+            )
+            == 1
+        )
+
+
+@pytest.mark.asyncio
+async def test_completion_audit_failure_rolls_back_session_shipment_and_idempotency(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        lab_auth = await receive_first_container(context, client)
+        await record_result(
+            client,
+            context,
+            lab_auth,
+            context["containers"][0],
+            {"result": "ACCEPTED"},
+            f"complete-audit-result-{context['suffix']}",
+        )
+
+    operation = f"shipments.{context['shipment_id']}.receiving.complete"
+    key = f"receiving-complete-audit-failure-{context['suffix']}"
+    owner_engine = create_async_engine(get_settings().migration_database_url)
+    try:
+        async with owner_engine.begin() as connection:
+            audit_trigger_sql = f"""
+                CREATE FUNCTION reject_receiving_complete_audit() RETURNS trigger AS $$
+                BEGIN
+                  IF NEW.operation = '{operation}' THEN
+                    RAISE EXCEPTION 'Injected receiving completion audit failure';
+                  END IF;
+                  RETURN NEW;
+                END; $$ LANGUAGE plpgsql
+                """
+            await connection.execute(text(audit_trigger_sql))
+            await connection.execute(
+                text("""
+                CREATE TRIGGER trg_test_reject_receiving_complete_audit
+                BEFORE INSERT ON audit_events FOR EACH ROW
+                EXECUTE FUNCTION reject_receiving_complete_audit()
+                """)
+            )
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app, raise_app_exceptions=False),
+            base_url="http://test",
+        ) as client:
+            response = await complete_receiving(client, context, lab_auth, key)
+        assert response.status_code == 500
+        assert response.json()["error"]["code"] == "INTERNAL_ERROR"
+        assert "Injected receiving completion audit failure" in caplog.text
+    finally:
+        async with owner_engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "DROP TRIGGER IF EXISTS trg_test_reject_receiving_complete_audit "
+                    "ON audit_events"
+                )
+            )
+            await connection.execute(
+                text("DROP FUNCTION IF EXISTS reject_receiving_complete_audit()")
+            )
+        await owner_engine.dispose()
+
+    async with get_session_factory()() as session:
+        shipment = await session.get(Shipment, context["shipment_id"])
+        assert shipment is not None and shipment.status == "RECEIVING"
+        receiving_session = await session.scalar(
+            select(ReceivingSessionModel).where(
+                ReceivingSessionModel.shipment_id == context["shipment_id"]
+            )
+        )
+        assert receiving_session is not None and receiving_session.status == "OPEN"
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(IdempotencyRecord)
+                .where(
+                    IdempotencyRecord.operation == operation,
+                    IdempotencyRecord.key == key,
+                )
+            )
+            == 0
+        )
+
+
+@pytest.mark.asyncio
+async def test_database_allows_valid_completion_and_reopen_transitions() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        lab_auth = await receive_first_container(context, client)
+        await record_result(
+            client,
+            context,
+            lab_auth,
+            context["containers"][0],
+            {"result": "ACCEPTED"},
+            f"direct-lifecycle-accepted-{context['suffix']}",
+        )
+
+    async with get_session_factory()() as session:
+        await session.execute(
+            text(
+                "UPDATE receiving_sessions SET status='CLOSED', closed_by=:actor, "
+                "closed_at=clock_timestamp() WHERE shipment_id=:shipment_id AND status='OPEN'"
+            ),
+            {"actor": context["sender_id"], "shipment_id": context["shipment_id"]},
+        )
+        await session.execute(
+            text(
+                "UPDATE shipments SET status='COMPLETED', version=version+1 WHERE id=:shipment_id"
+            ),
+            {"shipment_id": context["shipment_id"]},
+        )
+        await session.commit()
+
+        await session.execute(
+            text(
+                "INSERT INTO receiving_sessions "
+                "(id, shipment_id, sequence, status, opened_by, opened_at, reopen_reason) "
+                "VALUES (:id, :shipment_id, 2, 'OPEN', :actor, clock_timestamp(), :reason)"
+            ),
+            {
+                "id": uuid4(),
+                "shipment_id": context["shipment_id"],
+                "actor": context["sender_id"],
+                "reason": "Direct SQL reopen acceptance",
+            },
+        )
+        await session.execute(
+            text(
+                "UPDATE shipments SET status='RECEIVING', version=version+1 WHERE id=:shipment_id"
+            ),
+            {"shipment_id": context["shipment_id"]},
+        )
+        await session.commit()
+
+        shipment = await session.get(Shipment, context["shipment_id"])
+        receiving_sessions = list(
+            await session.scalars(
+                select(ReceivingSessionModel)
+                .where(ReceivingSessionModel.shipment_id == context["shipment_id"])
+                .order_by(ReceivingSessionModel.sequence)
+            )
+        )
+
+    assert shipment is not None and shipment.status == "RECEIVING"
+    assert [row.sequence for row in receiving_sessions] == [1, 2]
+    assert [row.status for row in receiving_sessions] == ["CLOSED", "OPEN"]
+    assert receiving_sessions[1].reopen_reason == "Direct SQL reopen acceptance"
+
+
+@pytest.mark.asyncio
+async def test_database_rejects_completion_while_receiving_session_is_open() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        lab_auth = await receive_first_container(context, client)
+        await record_result(
+            client,
+            context,
+            lab_auth,
+            context["containers"][0],
+            {"result": "ACCEPTED"},
+            f"direct-open-session-result-{context['suffix']}",
+        )
+
+    async with get_session_factory()() as session:
+        with pytest.raises(DBAPIError, match="Completion requires no OPEN receiving session"):
+            await session.execute(
+                text("UPDATE shipments SET status='COMPLETED' WHERE id=:shipment_id"),
+                {"shipment_id": context["shipment_id"]},
+            )
+        await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_database_rejects_completion_with_missing_received_item_result() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        await receive_first_container(context, client)
+
+    async with get_session_factory()() as session:
+        await session.execute(
+            text(
+                "UPDATE receiving_sessions SET status='CLOSED', closed_by=:actor, "
+                "closed_at=clock_timestamp() WHERE shipment_id=:shipment_id AND status='OPEN'"
+            ),
+            {"actor": context["sender_id"], "shipment_id": context["shipment_id"]},
+        )
+        with pytest.raises(DBAPIError, match="Every received item must have a result"):
+            await session.execute(
+                text("UPDATE shipments SET status='COMPLETED' WHERE id=:shipment_id"),
+                {"shipment_id": context["shipment_id"]},
+            )
+        await session.rollback()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("receipt_payload", "target_status", "expected_error"),
+    [
+        (
+            {"result": "MISSING", "reason_code": "SAMPLE_NOT_FOUND"},
+            "COMPLETED",
+            "COMPLETED requires all received item results to be ACCEPTED",
+        ),
+        (
+            {"result": "ACCEPTED"},
+            "COMPLETED_WITH_ISSUES",
+            "COMPLETED_WITH_ISSUES requires at least one receiving issue",
+        ),
+    ],
+)
+async def test_database_rejects_completion_status_that_disagrees_with_results(
+    receipt_payload: dict, target_status: str, expected_error: str
+) -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        lab_auth = await receive_first_container(context, client)
+        await record_result(
+            client,
+            context,
+            lab_auth,
+            context["containers"][0],
+            receipt_payload,
+            f"direct-derived-status-{context['suffix']}",
+        )
+
+    async with get_session_factory()() as session:
+        await session.execute(
+            text(
+                "UPDATE receiving_sessions SET status='CLOSED', closed_by=:actor, "
+                "closed_at=clock_timestamp() WHERE shipment_id=:shipment_id AND status='OPEN'"
+            ),
+            {"actor": context["sender_id"], "shipment_id": context["shipment_id"]},
+        )
+        with pytest.raises(DBAPIError, match=expected_error):
+            await session.execute(
+                text("UPDATE shipments SET status=:status WHERE id=:shipment_id"),
+                {"status": target_status, "shipment_id": context["shipment_id"]},
+            )
+        await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_database_rejects_reopen_without_exactly_one_open_session_with_reason() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        lab_auth = await receive_first_container(context, client)
+        await record_result(
+            client,
+            context,
+            lab_auth,
+            context["containers"][0],
+            {"result": "ACCEPTED"},
+            f"direct-reopen-result-{context['suffix']}",
+        )
+        completed = await complete_receiving(
+            client,
+            context,
+            lab_auth,
+            f"direct-reopen-complete-{context['suffix']}",
+        )
+        assert completed.status_code == 200, completed.text
+
+    async with get_session_factory()() as session:
+        with pytest.raises(
+            DBAPIError,
+            match="Reopen requires exactly one OPEN receiving session with a reason",
+        ):
+            await session.execute(
+                text("UPDATE shipments SET status='RECEIVING' WHERE id=:shipment_id"),
+                {"shipment_id": context["shipment_id"]},
+            )
+        await session.rollback()
+
+        await session.execute(
+            text(
+                "INSERT INTO receiving_sessions "
+                "(id, shipment_id, sequence, status, opened_by, opened_at, reopen_reason) "
+                "VALUES (:id, :shipment_id, 2, 'OPEN', :actor, clock_timestamp(), '  ')"
+            ),
+            {
+                "id": uuid4(),
+                "shipment_id": context["shipment_id"],
+                "actor": context["sender_id"],
+            },
+        )
+        with pytest.raises(
+            DBAPIError,
+            match="Reopen requires exactly one OPEN receiving session with a reason",
+        ):
+            await session.execute(
+                text("UPDATE shipments SET status='RECEIVING' WHERE id=:shipment_id"),
+                {"shipment_id": context["shipment_id"]},
+            )
+        await session.rollback()

@@ -3,7 +3,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,8 +26,11 @@ from app.modules.shipments.models import (
     ReceivingSession as ReceivingSessionModel,
 )
 from app.modules.shipments.schemas import (
+    CompleteReceivingRequest,
     ContainerItemWriteResponse,
     ReceiptResultRequest,
+    ReopenReceivingRequest,
+    ShipmentResponse,
 )
 from app.modules.shipments.schemas import (
     ReceivingHistory as ReceivingHistorySchema,
@@ -57,6 +60,52 @@ async def active_destination_lab_operator(
             )
         )
     )
+
+
+async def active_destination_lab_manager(
+    session: AsyncSession, shipment: Shipment, user_id: UUID
+) -> bool:
+    return bool(
+        await session.scalar(
+            select(Membership.id)
+            .join(User)
+            .join(Organization, Organization.id == Membership.organization_id)
+            .join(Region, Region.id == Organization.region_id)
+            .where(
+                Membership.user_id == user_id,
+                Membership.organization_id == shipment.destination_organization_id,
+                Membership.role == "LAB_MANAGER",
+                Membership.is_active.is_(True),
+                User.is_active.is_(True),
+                Organization.is_active.is_(True),
+                Region.is_active.is_(True),
+            )
+        )
+    )
+
+
+def receiving_shipment_response(shipment: Shipment) -> dict:
+    return {
+        "id": str(shipment.id),
+        "code": shipment.code,
+        "region_id": str(shipment.region_id),
+        "sender_org_id": str(shipment.sender_organization_id),
+        "destination_org_id": str(shipment.destination_organization_id),
+        "courier_user_id": str(shipment.courier_user_id) if shipment.courier_user_id else None,
+        "status": shipment.status,
+        "version": shipment.version,
+        "manifest_revision": shipment.manifest_revision,
+        "expected_delivery_at": shipment.expected_delivery_at.isoformat()
+        if shipment.expected_delivery_at
+        else None,
+        "sealed_at": shipment.sealed_at.isoformat() if shipment.sealed_at else None,
+        "created_at": shipment.created_at.isoformat(),
+        "updated_at": (shipment.__dict__.get("updated_at") or shipment.created_at).isoformat(),
+        "completed_at": None,
+        "closed_at": shipment.closed_at.isoformat() if shipment.closed_at else None,
+        "closed_by": str(shipment.closed_by) if shipment.closed_by else None,
+        "closure_reason": shipment.closure_reason,
+    }
 
 
 def item_response(item: ContainerItem) -> dict:
@@ -232,6 +281,226 @@ async def record_receipt(
     )
     response.status_code = status_code
     return result
+
+
+@router.post(
+    "/{shipment_id}/receiving/complete",
+    response_model=ShipmentResponse,
+    responses=ERRORS,
+    operation_id="completeReceiving",
+)
+async def complete_receiving(
+    shipment_id: UUID,
+    response: Response,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=128)],
+    payload: Annotated[CompleteReceivingRequest | None, Body()] = None,
+) -> ShipmentResponse:
+    visible_shipment = await session.get(Shipment, shipment_id)
+    if visible_shipment is None or not principal.has_role(
+        "LAB_OPERATOR", organization_id=visible_shipment.destination_organization_id
+    ):
+        raise HTTPException(status_code=404, detail="Resource not found")
+    if not await active_destination_lab_operator(session, visible_shipment, principal.user_id):
+        raise HTTPException(status_code=404, detail="Resource not found")
+
+    async def action() -> tuple[int, dict]:
+        shipment = await session.scalar(
+            select(Shipment).where(Shipment.id == shipment_id).with_for_update()
+        )
+        if shipment is None or not principal.has_role(
+            "LAB_OPERATOR", organization_id=shipment.destination_organization_id
+        ):
+            raise HTTPException(status_code=404, detail="Resource not found")
+        if not await active_destination_lab_operator(session, shipment, principal.user_id):
+            raise HTTPException(status_code=404, detail="Resource not found")
+        if shipment.status != "RECEIVING":
+            raise HTTPException(status_code=409, detail="Shipment is not receiving")
+
+        containers = list(
+            await session.scalars(
+                select(TransportContainer)
+                .where(TransportContainer.shipment_id == shipment.id)
+                .order_by(TransportContainer.id)
+                .with_for_update()
+            )
+        )
+        if not containers:
+            raise HTTPException(status_code=409, detail="Shipment has no containers to receive")
+        if any(
+            container.delivery_status not in {"RECEIVED", "UNDELIVERED_CLOSED"}
+            for container in containers
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Every container must be received or closed as undelivered",
+            )
+        received_containers = [
+            container for container in containers if container.delivery_status == "RECEIVED"
+        ]
+        if not received_containers:
+            raise HTTPException(status_code=409, detail="At least one container must be received")
+
+        items = list(
+            await session.scalars(
+                select(ContainerItem)
+                .where(ContainerItem.container_id.in_([container.id for container in containers]))
+                .order_by(ContainerItem.id)
+                .with_for_update()
+            )
+        )
+        items_by_container: dict[UUID, list[ContainerItem]] = {
+            container.id: [] for container in containers
+        }
+        for item in items:
+            items_by_container[item.container_id].append(item)
+
+        for container in received_containers:
+            if any(
+                item.receipt_result not in {"ACCEPTED", "MISSING", "REJECTED"}
+                or item.receipt_recorded_at is None
+                for item in items_by_container[container.id]
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Every item in a received container must have a result",
+                )
+        for container in containers:
+            if container.delivery_status == "UNDELIVERED_CLOSED" and any(
+                item.receipt_result is not None
+                or item.receipt_recorded_at is not None
+                or item.receipt_reason_code is not None
+                or item.receipt_comment is not None
+                for item in items_by_container[container.id]
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Undelivered container items must not have receipt results",
+                )
+
+        receiving_session = await session.scalar(
+            select(ReceivingSessionModel)
+            .where(
+                ReceivingSessionModel.shipment_id == shipment.id,
+                ReceivingSessionModel.status == "OPEN",
+            )
+            .with_for_update()
+        )
+        if receiving_session is None:
+            raise HTTPException(status_code=409, detail="Receiving session is not open")
+
+        all_received_accepted = len(received_containers) == len(containers) and all(
+            item.receipt_result == "ACCEPTED"
+            for container in received_containers
+            for item in items_by_container[container.id]
+        )
+        final_status = "COMPLETED" if all_received_accepted else "COMPLETED_WITH_ISSUES"
+        receiving_session.status = "CLOSED"
+        receiving_session.closed_by = principal.user_id
+        receiving_session.closed_at = await session.scalar(select(func.clock_timestamp()))
+        await session.flush()
+        shipment.status = final_status
+        shipment.version += 1
+        await session.flush()
+        await session.refresh(shipment, attribute_names=["updated_at"])
+        return 200, receiving_shipment_response(shipment)
+
+    operation = f"shipments.{shipment_id}.receiving.complete"
+    request_data = payload.model_dump(mode="json") if payload is not None else {}
+    status_code, result = await execute_idempotently(
+        session,
+        actor_id=principal.user_id,
+        operation=operation,
+        key=idempotency_key,
+        request_data=request_data,
+        action=action,
+        audit_details={"shipment_id": str(shipment_id)},
+    )
+    response.status_code = status_code
+    return ShipmentResponse.model_validate(result)
+
+
+@router.post(
+    "/{shipment_id}/receiving/reopen",
+    response_model=ShipmentResponse,
+    responses=ERRORS,
+    operation_id="reopenReceiving",
+)
+async def reopen_receiving(
+    shipment_id: UUID,
+    payload: ReopenReceivingRequest,
+    response: Response,
+    principal: Annotated[Principal, Depends(get_current_principal)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=128)],
+) -> ShipmentResponse:
+    visible_shipment = await session.get(Shipment, shipment_id)
+    if visible_shipment is None or not principal.has_role(
+        "LAB_MANAGER", organization_id=visible_shipment.destination_organization_id
+    ):
+        raise HTTPException(status_code=404, detail="Resource not found")
+    if not await active_destination_lab_manager(session, visible_shipment, principal.user_id):
+        raise HTTPException(status_code=404, detail="Resource not found")
+
+    async def action() -> tuple[int, dict]:
+        shipment = await session.scalar(
+            select(Shipment).where(Shipment.id == shipment_id).with_for_update()
+        )
+        if shipment is None or not principal.has_role(
+            "LAB_MANAGER", organization_id=shipment.destination_organization_id
+        ):
+            raise HTTPException(status_code=404, detail="Resource not found")
+        if not await active_destination_lab_manager(session, shipment, principal.user_id):
+            raise HTTPException(status_code=404, detail="Resource not found")
+        if shipment.status not in {"COMPLETED", "COMPLETED_WITH_ISSUES"}:
+            raise HTTPException(status_code=409, detail="Shipment receiving is not complete")
+
+        receiving_sessions = list(
+            await session.scalars(
+                select(ReceivingSessionModel)
+                .where(ReceivingSessionModel.shipment_id == shipment.id)
+                .order_by(ReceivingSessionModel.sequence)
+                .with_for_update()
+            )
+        )
+        if not receiving_sessions or any(
+            receiving_session.status != "CLOSED" for receiving_session in receiving_sessions
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Completed shipment must have only closed receiving sessions",
+            )
+
+        next_sequence = receiving_sessions[-1].sequence + 1
+        session.add(
+            ReceivingSessionModel(
+                shipment_id=shipment.id,
+                sequence=next_sequence,
+                status="OPEN",
+                opened_by=principal.user_id,
+                reopen_reason=payload.reason,
+            )
+        )
+        await session.flush()
+        shipment.status = "RECEIVING"
+        shipment.version += 1
+        await session.flush()
+        await session.refresh(shipment, attribute_names=["updated_at"])
+        return 200, receiving_shipment_response(shipment)
+
+    operation = f"shipments.{shipment_id}.receiving.reopen"
+    status_code, result = await execute_idempotently(
+        session,
+        actor_id=principal.user_id,
+        operation=operation,
+        key=idempotency_key,
+        request_data=payload.model_dump(mode="json"),
+        action=action,
+        audit_details={"shipment_id": str(shipment_id), "reason": payload.reason},
+    )
+    response.status_code = status_code
+    return ShipmentResponse.model_validate(result)
 
 
 @router.get(

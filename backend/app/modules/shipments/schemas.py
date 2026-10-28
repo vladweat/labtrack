@@ -78,6 +78,23 @@ class ReasonRequest(BaseModel):
         return value.strip()
 
 
+class CompleteReceivingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ReopenReceivingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def nonblank_reason(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("reason must not be blank")
+        return value.strip()
+
+
 class ContainerCodeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
