@@ -295,7 +295,7 @@ async def complete_receiving(
     principal: Annotated[Principal, Depends(get_current_principal)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
     idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=8, max_length=128)],
-    payload: Annotated[CompleteReceivingRequest | None, Body()] = None,
+    payload: Annotated[CompleteReceivingRequest, Body(default_factory=CompleteReceivingRequest)],
 ) -> ShipmentResponse:
     visible_shipment = await session.get(Shipment, shipment_id)
     if visible_shipment is None or not principal.has_role(
@@ -307,7 +307,10 @@ async def complete_receiving(
 
     async def action() -> tuple[int, dict]:
         shipment = await session.scalar(
-            select(Shipment).where(Shipment.id == shipment_id).with_for_update()
+            select(Shipment)
+            .where(Shipment.id == shipment_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if shipment is None or not principal.has_role(
             "LAB_OPERATOR", organization_id=shipment.destination_organization_id
@@ -445,7 +448,10 @@ async def reopen_receiving(
 
     async def action() -> tuple[int, dict]:
         shipment = await session.scalar(
-            select(Shipment).where(Shipment.id == shipment_id).with_for_update()
+            select(Shipment)
+            .where(Shipment.id == shipment_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
         if shipment is None or not principal.has_role(
             "LAB_MANAGER", organization_id=shipment.destination_organization_id

@@ -1,6 +1,6 @@
 # LabTrack v0.6.1 — Verification, Test Matrix & Implementation Gates
 
-**Scope:** requirement-level verification plan and implementation gates. Foundation, Manifest/Stage B, and Stage C whole-Shipment Pickup are implemented with PostgreSQL migrations and integration tests. Per-container delivery, receiving, incidents, offline, notifications, and analytics remain unimplemented. Start from [v0.6 plan](19-roadmap-v06.md) and hardening decisions [20](20-decisions-v061.md). Use **real PostgreSQL** for locks, triggers, partial indexes and migration testing.
+**Scope:** requirement-level verification plan and implementation gates. Stage F tube receiving/reopening is implemented at `ec85bdf` on `feature/stage-f-receiving` in `/root/.codex/worktrees/3f5c/labtrack`, not `main`; Alembic head is `0007_stage_f_lifecycle`. Verification passed: backend suite 128 passed; Ruff, formatting, compilation, Alembic check and downgrade/upgrade cycle from `0005_stage_e` to `0007_stage_f_lifecycle`, app-role privileges, and Stage F static/runtime OpenAPI contract. Three existing Alembic `path_separator` warnings remain. Final whole-branch review is pending. Stage G offline PWA and Stage H product finish remain future milestones. The acceptance checks below remain applicable to implementation and regression verification; see the [roadmap](19-roadmap-v06.md) for current project state. Start from the [v0.6 plan](19-roadmap-v06.md) and hardening decisions [20](20-decisions-v061.md). Use **real PostgreSQL** for locks, triggers, partial indexes and migration testing.
 
 ## 1. P0 — Chain of custody
 
@@ -78,10 +78,8 @@
 
 **Specification Ready for Foundation:** all 19 selected answers recorded, v0.6.1 API and schema draft coherent, core normal workflow unchanged.
 
-**Exceptional Receipt Ready for Implementation:** OPEN-01 (two distinct destination Lab witnesses, at least one LAB_MANAGER), OPEN-02 (already CONFIRMED whole-Shipment Pickup), OPEN-03 (region opens/reviews; origin Sender or destination Lab attests as themselves; region records separate outcome) are **APPROVED**. Implementation must pass strict authorization, physical-evidence attestation and PostgreSQL concurrency tests; approval is not proof the code works.
+**Exceptional Receipt acceptance:** OPEN-01 (two distinct destination Lab witnesses, at least one LAB_MANAGER), OPEN-02 (already CONFIRMED whole-Shipment Pickup), OPEN-03 (region opens/reviews; origin Sender or destination Lab attests as themselves; region records separate outcome) are **APPROVED**. Implementations must pass strict authorization, physical-evidence attestation and PostgreSQL concurrency tests.
 
 **Offline Ready for Implementation:** OPEN-04 is **APPROVED**: manifest revision, target Container/Handoff version, Pickup phase and active authorization are relevant; unrelated Shipment bookkeeping alone is not. 24h snapshot guard, 90d replay, tombstones and two-device conflicts remain required tests.
-
-**Stage B and Stage C implemented locally:** migrations and FastAPI routes cover the sample-to-sealed-manifest flow and bilateral whole-Shipment Pickup, including withdrawal, cancellation, idempotency, audit, row locking, and database trigger protection. The remaining v0.6.1 OpenAPI contract, offline client, operational dashboards, and later delivery/receiving workflows are not complete. This status reflects local branch state and does not imply the changes have been committed or deployed.
 
 **Scope control:** no new third Sample/Container discrepancy type, no phantom witness signatures, no retrospective custody acceptance from stale commands, no Courier reassignment after seal.

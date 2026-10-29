@@ -412,9 +412,9 @@ class ContainerItemResponse(BaseModel):
     sample_id: UUID
     sample_code: str
     material_type: str
-    receipt_result: str | None = None
-    receipt_reason_code: str | None = None
-    receipt_comment: str | None = None
+    receipt_result: Literal["ACCEPTED", "MISSING", "REJECTED"] | None
+    receipt_reason_code: str | None
+    receipt_comment: str | None
 
 
 class ContainerResponse(BaseModel):
@@ -445,10 +445,10 @@ class ContainerItem(BaseModel):
     id: UUID
     container_id: UUID
     sample_id: UUID
-    receipt_result: str | None = None
-    receipt_recorded_at: datetime | None = None
-    receipt_reason_code: str | None = None
-    receipt_comment: str | None = None
+    receipt_result: Literal["ACCEPTED", "MISSING", "REJECTED"] | None
+    receipt_recorded_at: datetime | None
+    receipt_reason_code: str | None
+    receipt_comment: str | None
 
 
 ContainerItemWriteResponse = ContainerItem
@@ -520,8 +520,8 @@ class ReceiptRevision(BaseModel):
     new_result: Literal["ACCEPTED", "MISSING", "REJECTED"]
     old_reason_code: str | None
     new_reason_code: str | None
-    old_comment: str | None
-    new_comment: str | None
+    old_comment: str | None = Field(max_length=500)
+    new_comment: str | None = Field(max_length=500)
     changed_by: UUID
     changed_at: datetime
 

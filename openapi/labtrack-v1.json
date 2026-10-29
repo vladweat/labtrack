@@ -8808,6 +8808,20 @@
               "null"
             ]
           },
+          "old_comment": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 500
+          },
+          "new_comment": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 500
+          },
           "changed_by": {
             "type": "string",
             "format": "uuid"
@@ -8825,6 +8839,8 @@
           "new_result",
           "old_reason_code",
           "new_reason_code",
+          "old_comment",
+          "new_comment",
           "changed_by",
           "changed_at"
         ],

@@ -12,6 +12,10 @@
 | POST | `/shipments/{shipment_id}/custody-incidents/{incident_id}/resolve` | Region-scoped REGIONAL_OPERATIONS records independent administrative resolution; never authenticates as missing Courier |
 | POST | `/shipments/{shipment_id}/containers/{container_id}/exceptional-receipts` | REGIONAL_OPERATIONS initiates destination-laboratory exceptional receipt review, **no immediate RECEIVED state** |
 | POST | `/shipments/{shipment_id}/container-issues/{issue_id}/proposals/{proposal_id}/withdraw` | Original REGIONAL_OPERATIONS proposer withdraws their own PENDING proposal with mandatory reason |
+| PATCH | `/shipments/{shipment_id}/receiving/items/{item_id}` | Destination LAB_OPERATOR records a result for an item in a verified RECEIVED container |
+| POST | `/shipments/{shipment_id}/receiving/complete` | Destination LAB_OPERATOR finalizes receiving after all outcomes and container dispositions are complete |
+| POST | `/shipments/{shipment_id}/receiving/reopen` | Destination LAB_MANAGER reopens completed receiving with a reason |
+| GET | `/shipments/{shipment_id}/receiving/history` | Origin Sender or destination Lab reads receiving sessions and paginated result revisions |
 | GET | `/notifications` | Recipient's Inbox, read/unread filter, cursor/limit pagination |
 | POST | `/notifications/{notification_id}/read` | Mark own notification read idempotently |
 | GET | `/notifications/unread-count` | Number of unread Inbox items for authenticated recipient |
@@ -87,6 +91,14 @@ Introduce `PATCH /shipments/{shipment_id}` for scoped Sender in DRAFT with `{"ex
 - `POST /shipments/{id}/receiving/items/{item_id}` is **not** introduced; retain existing `PATCH` route. Eligibility now checks verified NORMAL **or** approved EXCEPTIONAL receipt evidence + OPEN session.
 - Existing ContainerIssue MISSING/REJECTED and mixed-shipment completion rules remain unchanged. After RECEIVED, a container-level issue must not rewind custody: record REJECTED outcomes individually on affected samples.
 
+### Stage F receiving lifecycle (implemented)
+
+`PATCH /shipments/{shipment_id}/receiving/items/{item_id}` requires active destination `LAB_OPERATOR` membership, verified NORMAL or EXCEPTIONAL receipt evidence for the item's RECEIVED container, and an OPEN receiving session. A received container remains writable while sibling containers are unresolved. Each accepted change updates the current item projection and appends an immutable `ReceiptRevision` with actor, reason/comment, prior and new values, and server timestamp; mutation, audit and idempotency response are transactional.
+
+`POST /shipments/{shipment_id}/receiving/complete` accepts an omitted body or `{}` (explicit JSON `null` is rejected) and requires an idempotency key. Completion requires every container terminal (`RECEIVED` or `UNDELIVERED_CLOSED`), at least one received container, results for every received item, no results for undelivered items, and one OPEN session. It closes that session and sets `COMPLETED` only when every container was received and every item is `ACCEPTED`; otherwise it sets `COMPLETED_WITH_ISSUES`.
+
+`POST /shipments/{shipment_id}/receiving/reopen` requires an active destination `LAB_MANAGER`, a nonblank reason, and an idempotency key. It accepts only `COMPLETED` or `COMPLETED_WITH_ISSUES`, creates a new OPEN session with the next sequence, and preserves prior sessions, results and revisions. `GET /shipments/{shipment_id}/receiving/history` is visible to the origin Sender and destination Lab Operator/Manager; `limit` defaults to 20 (maximum 100), `offset` to 0, and applies to the revision history. The feature-branch Alembic head is `0007_stage_f_lifecycle`, after `0006_stage_f`.
+
 ## 3. Inbox semantics (Q15)
 
 - `GET /notifications?unread_only=true&limit=20&offset=0` returns own notifications (safe event metadata, not patient data). Optional query `unread_only` default false.
@@ -130,4 +142,4 @@ Thresholds are config constants, not compliance SLA. Poll/query from PostgreSQL;
 | `IDEMPOTENCY_KEY_REUSED` | Same Courier command ID with changed canonical request |
 | `NOTIFICATION_NOT_FOUND` | Notification outside caller's own Inbox (masked 404) |
 
-All state-changing endpoints require a stable Idempotency-Key except Courier batch sync where each command has client_command_id; GET requires none. Use 409 for business conflicts, 422 for invalid shape, scoped 403 or masked 404 for authorization. Exceptional endpoints are **approved for implementation**, but the repository still contains no working backend; pass witness, scope and concurrency tests before production-like activation.
+All state-changing endpoints require a stable Idempotency-Key except Courier batch sync where each command has client_command_id; GET requires none. Use 409 for business conflicts, 422 for invalid shape, scoped 403 or masked 404 for authorization. Exceptional endpoints are implemented in Stage E; the witness, scope and concurrency requirements above remain acceptance and regression checks. Current implementation and verification status is in the [roadmap](19-roadmap-v06.md).

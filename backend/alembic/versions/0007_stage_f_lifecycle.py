@@ -124,6 +124,20 @@ def upgrade() -> None:
              ) THEN
             RAISE EXCEPTION 'Reopen requires exactly one OPEN receiving session with a reason';
           END IF;
+          IF NOT EXISTS (
+            SELECT 1 FROM receiving_sessions rs
+              JOIN memberships m ON m.user_id=rs.opened_by
+              JOIN users u ON u.id=m.user_id
+              JOIN organizations o ON o.id=m.organization_id
+              JOIN regions r ON r.id=o.region_id
+            WHERE rs.shipment_id=NEW.id AND rs.status='OPEN' AND
+              rs.sequence=(SELECT max(sequence) FROM receiving_sessions WHERE shipment_id=NEW.id) AND
+              m.organization_id=NEW.destination_organization_id AND m.role='LAB_MANAGER' AND
+              m.is_active AND u.is_active AND o.is_active AND r.is_active AND
+              o.region_id=NEW.region_id
+          ) THEN
+            RAISE EXCEPTION 'Reopen requires an active destination LAB_MANAGER opener';
+          END IF;
         ELSIF OLD.status IN ('IN_TRANSIT','DELIVERY_PENDING','DELIVERY_BLOCKED','PARTIALLY_DELIVERED','RECEIVING') AND
               NEW.status='CLOSED_UNDELIVERED' THEN
           IF NOT EXISTS (SELECT 1 FROM transport_containers WHERE shipment_id=NEW.id) OR
@@ -276,8 +290,115 @@ def upgrade() -> None:
     END; $$ LANGUAGE plpgsql
     """)
 
+    op.execute("""
+    CREATE FUNCTION guard_receiving_session() RETURNS trigger AS $$
+    DECLARE destination_id uuid; shipment_region_id uuid; expected_sequence integer;
+    BEGIN
+      IF TG_OP='DELETE' THEN
+        RAISE EXCEPTION 'Receiving sessions cannot be deleted';
+      END IF;
+      IF TG_OP='UPDATE' THEN
+        IF OLD.status='CLOSED' THEN
+          RAISE EXCEPTION 'Closed receiving sessions are immutable';
+        END IF;
+        IF OLD.status<>'OPEN' OR NEW.status<>'CLOSED' THEN
+          RAISE EXCEPTION 'Receiving sessions may only transition from OPEN to CLOSED';
+        END IF;
+        IF NEW.id IS DISTINCT FROM OLD.id OR NEW.shipment_id IS DISTINCT FROM OLD.shipment_id OR
+           NEW.sequence IS DISTINCT FROM OLD.sequence OR NEW.opened_by IS DISTINCT FROM OLD.opened_by OR
+           NEW.opened_at IS DISTINCT FROM OLD.opened_at OR
+           NEW.reopen_reason IS DISTINCT FROM OLD.reopen_reason THEN
+          RAISE EXCEPTION 'Receiving session opening fields are immutable';
+        END IF;
+        RETURN NEW;
+      END IF;
+
+      IF NEW.status<>'OPEN' OR NEW.closed_by IS NOT NULL OR NEW.closed_at IS NOT NULL THEN
+        RAISE EXCEPTION 'Receiving sessions must be created OPEN';
+      END IF;
+      SELECT destination_organization_id, region_id
+        INTO destination_id, shipment_region_id
+        FROM shipments WHERE id=NEW.shipment_id;
+      IF destination_id IS NULL THEN
+        RAISE EXCEPTION 'Receiving session requires an existing Shipment';
+      END IF;
+      SELECT COALESCE(max(sequence), 0)+1 INTO expected_sequence
+        FROM receiving_sessions WHERE shipment_id=NEW.shipment_id;
+      IF NEW.sequence<>expected_sequence THEN
+        RAISE EXCEPTION 'Receiving session sequence must be the next Shipment sequence';
+      END IF;
+
+      IF NEW.sequence=1 THEN
+        IF NEW.reopen_reason IS NOT NULL THEN
+          RAISE EXCEPTION 'Initial receiving session cannot have a reopen reason';
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM transport_containers c
+            JOIN container_receipt_evidence e ON e.container_id=c.id
+            JOIN handoffs h ON h.id=e.confirmed_delivery_handoff_id
+            JOIN memberships m ON m.user_id=NEW.opened_by
+            JOIN users u ON u.id=m.user_id
+            JOIN organizations o ON o.id=m.organization_id
+            JOIN regions r ON r.id=o.region_id
+          WHERE c.shipment_id=NEW.shipment_id AND c.delivery_status='RECEIVED' AND
+            c.received_by=NEW.opened_by AND c.receipt_evidence->>'method'='NORMAL' AND
+            c.receipt_evidence->>'id'=e.id::text AND e.method='NORMAL' AND
+            e.verified_by=NEW.opened_by AND c.receipt_evidence->>'verified_by'=NEW.opened_by::text AND
+            e.confirmed_delivery_handoff_id=h.id AND h.shipment_id=NEW.shipment_id AND
+            h.container_id=c.id AND h.kind='DELIVERY' AND h.status='CONFIRMED' AND
+            h.confirmed_by=NEW.opened_by AND m.organization_id=destination_id AND
+            m.role IN ('LAB_OPERATOR','LAB_MANAGER') AND m.is_active AND u.is_active AND
+            o.is_active AND r.is_active AND o.region_id=shipment_region_id
+        ) AND NOT EXISTS (
+          SELECT 1 FROM transport_containers c
+            JOIN container_receipt_evidence e ON e.container_id=c.id
+            JOIN custody_incidents i ON i.id=e.resolved_incident_id
+            JOIN memberships m ON m.user_id=i.resolved_by
+            JOIN users u ON u.id=m.user_id
+            JOIN regions r ON r.id=m.region_id
+          WHERE c.shipment_id=NEW.shipment_id AND c.delivery_status='RECEIVED' AND
+            c.received_by IS NULL AND c.receipt_evidence->>'method'='EXCEPTIONAL' AND
+            c.receipt_evidence->>'id'=e.id::text AND
+            c.receipt_evidence->>'incident_id'=i.id::text AND
+            c.receipt_evidence->>'verified_by'=i.resolved_by::text AND e.method='EXCEPTIONAL' AND
+            e.verified_by=i.resolved_by AND i.id=e.resolved_incident_id AND
+            i.shipment_id=NEW.shipment_id AND i.container_id=c.id AND i.phase='DELIVERY' AND
+            i.status='RESOLVED' AND i.resolution='EXCEPTIONAL_RECEIPT_VERIFIED' AND
+            i.resolved_by=NEW.opened_by AND m.region_id=shipment_region_id AND
+            m.organization_id IS NULL AND m.role='REGIONAL_OPERATIONS' AND
+            m.is_active AND u.is_active AND r.is_active
+        ) THEN
+          RAISE EXCEPTION 'Initial receiving session opener must be a receipt confirmer or verified exceptional resolver';
+        END IF;
+      ELSE
+        IF length(trim(COALESCE(NEW.reopen_reason,'')))=0 THEN
+          RAISE EXCEPTION 'Reopened receiving session requires a nonblank reason';
+        END IF;
+        IF NOT EXISTS (
+          SELECT 1 FROM memberships m
+            JOIN users u ON u.id=m.user_id
+            JOIN organizations o ON o.id=m.organization_id
+            JOIN regions r ON r.id=o.region_id
+          WHERE m.user_id=NEW.opened_by AND m.organization_id=destination_id AND
+            m.role='LAB_MANAGER' AND m.is_active AND u.is_active AND o.is_active AND
+            r.is_active AND o.region_id=shipment_region_id
+        ) THEN
+          RAISE EXCEPTION 'Reopened receiving session opener must be an active destination LAB_MANAGER';
+        END IF;
+      END IF;
+      RETURN NEW;
+    END; $$ LANGUAGE plpgsql
+    """)
+    op.execute("""
+    CREATE TRIGGER trg_guard_receiving_session
+    BEFORE INSERT OR UPDATE OR DELETE ON receiving_sessions
+    FOR EACH ROW EXECUTE FUNCTION guard_receiving_session()
+    """)
+
 
 def downgrade() -> None:
+    op.execute("DROP TRIGGER IF EXISTS trg_guard_receiving_session ON receiving_sessions")
+    op.execute("DROP FUNCTION IF EXISTS guard_receiving_session()")
     op.execute("""
     CREATE OR REPLACE FUNCTION guard_delivery_shipment() RETURNS trigger AS $$
     BEGIN

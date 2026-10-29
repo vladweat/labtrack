@@ -1,6 +1,7 @@
 """Receipt revision persistence and PostgreSQL receiving guards."""
 
 import asyncio
+import json
 from pathlib import Path
 from uuid import uuid4
 
@@ -22,10 +23,11 @@ from test_pickup_api import PASSWORD, create_pickup_fixture
 from app.core.config import get_settings
 from app.core.security import hash_password
 from app.db.base import Base
-from app.db.session import get_session_factory
+from app.db.session import get_db_session, get_session_factory
 from app.main import app
 from app.modules.audit.models import AuditEvent
 from app.modules.idempotency.models import IdempotencyRecord
+from app.modules.identity.access import get_current_principal
 from app.modules.identity.models import Membership, Organization, User
 from app.modules.shipments.models import (
     ContainerItem,
@@ -43,6 +45,140 @@ RECEIPT_GUARD_ERROR = (
 )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "result,reason,comment,inactive,valid",
+    [
+        pytest.param(
+            "REJECTED", "SAMPLE_LABEL_MISMATCH", "Label differs", False, True, id="valid-rejected"
+        ),
+        pytest.param("MISSING", "SAMPLE_NOT_FOUND", None, False, True, id="valid-missing"),
+        pytest.param("ACCEPTED", None, None, False, True, id="accepted-without-reason"),
+        pytest.param("REJECTED", "CONTAINER_SEAL_BROKEN", None, False, False, id="wrong-scope"),
+        pytest.param("REJECTED", "SAMPLE_NOT_FOUND", None, False, False, id="wrong-kind"),
+        pytest.param("REJECTED", "SAMPLE_LABEL_MISMATCH", None, True, False, id="inactive"),
+        pytest.param("ACCEPTED", "SAMPLE_NOT_FOUND", None, False, False, id="accepted-with-reason"),
+        pytest.param(
+            "ACCEPTED", None, "Unexpected comment", False, False, id="accepted-with-comment"
+        ),
+        pytest.param("MISSING", None, None, False, False, id="missing-without-reason"),
+        pytest.param(None, "SAMPLE_NOT_FOUND", None, False, False, id="reason-without-result"),
+        pytest.param(None, None, "Unexpected comment", False, False, id="comment-without-result"),
+    ],
+)
+async def test_database_validates_receipt_result_reason_pairs(
+    result: str | None, reason: str | None, comment: str | None, inactive: bool, valid: bool
+) -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        await receive_first_container(context, client)
+    item_id = await item_id_for_container(context["container_id"])
+    engine = create_async_engine(get_settings().migration_database_url)
+    try:
+        async with engine.connect() as connection:
+            if inactive:
+                # Owner-only fixture setup; restore the catalog guard before the
+                # result write and roll back the catalog change with this test.
+                await connection.execute(
+                    text(
+                        "ALTER TABLE issue_reason_codes DISABLE TRIGGER trg_issue_reason_read_only"
+                    )
+                )
+                await connection.execute(
+                    text("UPDATE issue_reason_codes SET is_active=false WHERE code=:reason"),
+                    {"reason": reason},
+                )
+                await connection.execute(
+                    text("ALTER TABLE issue_reason_codes ENABLE TRIGGER trg_issue_reason_read_only")
+                )
+            statement = text(
+                "UPDATE container_items SET receipt_result=:result, receipt_reason_code=:reason, "
+                "receipt_comment=:comment, receipt_recorded_at=CASE WHEN :has_result "
+                "THEN clock_timestamp() ELSE NULL END WHERE id=:item_id"
+            )
+            parameters = {
+                "result": result,
+                "reason": reason,
+                "comment": comment,
+                "item_id": item_id,
+                "has_result": result is not None,
+            }
+            if valid:
+                await connection.execute(statement, parameters)
+                row = (
+                    await connection.execute(
+                        text(
+                            "SELECT receipt_result, receipt_reason_code, receipt_comment "
+                            "FROM container_items WHERE id=:item_id"
+                        ),
+                        {"item_id": item_id},
+                    )
+                ).one()
+                assert tuple(row) == (result, reason, comment)
+                await connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+            else:
+                with pytest.raises(DBAPIError, match="Receipt result reason"):
+                    await connection.execute(statement, parameters)
+            await connection.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_database_validates_receipt_reason_on_insert() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+    async with get_session_factory()() as session:
+        # The result guard runs before manifest immutability and uniqueness checks.
+        with pytest.raises(DBAPIError, match="Receipt result reason"):
+            await session.execute(
+                text(
+                    "INSERT INTO container_items "
+                    "(id, container_id, sample_id, receipt_reason_code) "
+                    "SELECT :id, container_id, sample_id, 'SAMPLE_NOT_FOUND' "
+                    "FROM container_items WHERE container_id=:container_id"
+                ),
+                {"id": uuid4(), "container_id": context["container_id"]},
+            )
+        await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_database_rejects_session_rotation_before_completion() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        await receive_first_container(context, client)
+        await authorize_lab_manager(context["shipment_id"], client)
+    async with get_session_factory()() as session:
+        manager_id = await session.scalar(
+            select(Membership.user_id)
+            .join(Shipment, Shipment.destination_organization_id == Membership.organization_id)
+            .where(Shipment.id == context["shipment_id"], Membership.role == "LAB_MANAGER")
+        )
+        assert manager_id is not None
+        await session.execute(
+            text(
+                "UPDATE receiving_sessions SET status='CLOSED', closed_by=:actor, "
+                "closed_at=clock_timestamp() WHERE shipment_id=:shipment_id AND status='OPEN'"
+            ),
+            {"actor": manager_id, "shipment_id": context["shipment_id"]},
+        )
+        with pytest.raises(
+            DBAPIError, match="Reopened receiving session requires a completed Shipment"
+        ):
+            await session.execute(
+                text(
+                    "INSERT INTO receiving_sessions "
+                    "(id, shipment_id, sequence, status, opened_by, opened_at, reopen_reason) "
+                    "VALUES (:id, :shipment_id, 2, 'OPEN', :actor, "
+                    "clock_timestamp(), 'Premature reopen')"
+                ),
+                {"id": uuid4(), "shipment_id": context["shipment_id"], "actor": manager_id},
+            )
+            await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        await session.rollback()
+
+
 def test_stage_f_migration_is_additive_after_stage_e() -> None:
     backend = Path(__file__).resolve().parents[2]
     config = Config(str(backend / "alembic.ini"))
@@ -50,9 +186,233 @@ def test_stage_f_migration_is_additive_after_stage_e() -> None:
     script = ScriptDirectory.from_config(config)
     head = script.get_current_head()
     revision = script.get_revision(head)
+    stage_f_revision = script.get_revision("0006_stage_f")
 
-    assert revision.revision == "0007_stage_f_lifecycle"
-    assert revision.down_revision == "0006_stage_f"
+    assert revision.revision == "0008_stage_f_integrity"
+    assert revision.down_revision == "0007_stage_f_lifecycle"
+    assert script.get_revision("0007_stage_f_lifecycle").down_revision == "0006_stage_f"
+    assert stage_f_revision.down_revision == "0005_stage_e"
+
+
+def test_stage_f_static_and_runtime_openapi_contracts_align() -> None:
+    contract_path = Path(__file__).resolve().parents[3] / "openapi" / "labtrack-v1.json"
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    runtime = app.openapi()
+    operations = (
+        (
+            "PATCH",
+            "/shipments/{shipment_id}/receiving/items/{item_id}",
+            "recordReceipt",
+            "ReceiptResultRequest",
+            "ContainerItem",
+            "ContainerItem",
+        ),
+        (
+            "POST",
+            "/shipments/{shipment_id}/receiving/complete",
+            "completeReceiving",
+            None,
+            "Shipment",
+            "ShipmentResponse",
+        ),
+        (
+            "POST",
+            "/shipments/{shipment_id}/receiving/reopen",
+            "reopenReceiving",
+            "ReopenReceivingRequest",
+            "Shipment",
+            "ShipmentResponse",
+        ),
+        (
+            "GET",
+            "/shipments/{shipment_id}/receiving/history",
+            "getReceivingHistory",
+            None,
+            "ReceivingHistory",
+            "ReceivingHistory",
+        ),
+    )
+    expected_statuses = {"200", "401", "403", "404", "409", "422", "503"}
+    static_schemas = contract["components"]["schemas"]
+    runtime_schemas = runtime["components"]["schemas"]
+
+    for (
+        method,
+        path,
+        operation_id,
+        request_ref,
+        static_response_ref,
+        runtime_response_ref,
+    ) in operations:
+        static_operation = contract["paths"][path][method.lower()]
+        runtime_operation = runtime["paths"][f"/api/v1{path}"][method.lower()]
+        assert static_operation["operationId"] == runtime_operation["operationId"] == operation_id
+        assert set(static_operation["responses"]) == set(runtime_operation["responses"])
+        assert set(static_operation["responses"]) == expected_statuses
+
+        if request_ref is not None:
+            static_request_ref = static_operation["requestBody"]["content"]["application/json"][
+                "schema"
+            ]["$ref"].rsplit("/", 1)[1]
+            runtime_request_ref = runtime_operation["requestBody"]["content"]["application/json"][
+                "schema"
+            ]["$ref"].rsplit("/", 1)[1]
+            assert static_request_ref == runtime_request_ref == request_ref
+        elif operation_id == "completeReceiving":
+            static_body = static_operation["requestBody"]
+            runtime_body = runtime_operation["requestBody"]
+            assert static_body.get("required", False) is False
+            assert runtime_body.get("required", False) is False
+            static_body_schema = static_body["content"]["application/json"]["schema"]
+            assert static_body_schema == {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            }
+            runtime_body_schema = runtime_body["content"]["application/json"]["schema"]
+            assert runtime_body_schema == {"$ref": "#/components/schemas/CompleteReceivingRequest"}
+            runtime_body_ref = runtime_body_schema["$ref"].rsplit("/", 1)[1]
+            assert "anyOf" not in runtime_body_schema
+            runtime_empty_body = runtime_schemas[runtime_body_ref]
+            assert {
+                key: runtime_empty_body[key]
+                for key in ("type", "properties", "additionalProperties")
+            } == static_body_schema
+        else:
+            assert "requestBody" not in static_operation
+            assert "requestBody" not in runtime_operation
+
+        static_response = static_operation["responses"]["200"]["content"]["application/json"][
+            "schema"
+        ]["$ref"].rsplit("/", 1)[1]
+        runtime_response = runtime_operation["responses"]["200"]["content"]["application/json"][
+            "schema"
+        ]["$ref"].rsplit("/", 1)[1]
+        assert static_response == static_response_ref
+        assert runtime_response == runtime_response_ref
+        assert set(static_schemas[static_response]["properties"]) == set(
+            runtime_schemas[runtime_response]["properties"]
+        )
+        assert set(static_schemas[static_response]["required"]) == set(
+            runtime_schemas[runtime_response]["required"]
+        )
+
+    static_manifest_item = static_schemas["ContainerManifest"]["properties"]["items"]["items"]
+    runtime_manifest_item = runtime_schemas["ContainerItemResponse"]
+    assert set(static_manifest_item["properties"]) == set(runtime_manifest_item["properties"])
+    assert set(static_manifest_item["required"]) == set(runtime_manifest_item["required"])
+    assert set(static_manifest_item["required"]) == {
+        "id",
+        "sample_id",
+        "sample_code",
+        "material_type",
+        "receipt_result",
+        "receipt_reason_code",
+        "receipt_comment",
+    }
+
+    for static_schema, runtime_schema in (
+        (static_schemas["ContainerItem"], runtime_schemas["ContainerItem"]),
+        (static_manifest_item, runtime_manifest_item),
+    ):
+        static_result = static_schema["properties"]["receipt_result"]
+        runtime_result = runtime_schema["properties"]["receipt_result"]
+        assert static_result["type"] == ["string", "null"]
+        assert set(static_result["enum"]) == {"ACCEPTED", "MISSING", "REJECTED", None}
+        assert {variant["type"] for variant in runtime_result["anyOf"]} == {"string", "null"}
+        runtime_result_enum = next(
+            set(variant["enum"]) for variant in runtime_result["anyOf"] if "enum" in variant
+        )
+        assert runtime_result_enum == {"ACCEPTED", "MISSING", "REJECTED"}
+
+    static_history = contract["paths"]["/shipments/{shipment_id}/receiving/history"]["get"]
+    runtime_history = runtime["paths"]["/api/v1/shipments/{shipment_id}/receiving/history"]["get"]
+    static_query = {
+        parameter["name"]: parameter["schema"]
+        for parameter in static_history["parameters"]
+        if parameter["in"] == "query"
+    }
+    runtime_query = {
+        parameter["name"]: parameter["schema"]
+        for parameter in runtime_history["parameters"]
+        if parameter["in"] == "query"
+    }
+    assert set(static_query) == set(runtime_query) == {"limit", "offset"}
+    assert (
+        {name: schema["default"] for name, schema in static_query.items()}
+        == {name: schema["default"] for name, schema in runtime_query.items()}
+        == {"limit": 20, "offset": 0}
+    )
+
+    static_revision = static_schemas["ReceiptRevision"]
+    runtime_revision = runtime_schemas["ReceiptRevision"]
+    revision_fields = {
+        "id",
+        "receiving_session_id",
+        "container_item_id",
+        "old_result",
+        "new_result",
+        "old_reason_code",
+        "new_reason_code",
+        "old_comment",
+        "new_comment",
+        "changed_by",
+        "changed_at",
+    }
+    assert (
+        set(static_revision["properties"]) == set(runtime_revision["properties"]) == revision_fields
+    )
+    assert set(static_revision["required"]) == set(runtime_revision["required"]) == revision_fields
+    assert static_revision["additionalProperties"] is False
+    assert runtime_revision["additionalProperties"] is False
+    for field in ("old_comment", "new_comment"):
+        assert static_revision["properties"][field]["type"] == ["string", "null"]
+        assert static_revision["properties"][field]["maxLength"] == 500
+        runtime_types = {
+            variant["type"] for variant in runtime_revision["properties"][field]["anyOf"]
+        }
+        assert runtime_types == {"string", "null"}
+        runtime_string = next(
+            variant
+            for variant in runtime_revision["properties"][field]["anyOf"]
+            if variant.get("type") == "string"
+        )
+        assert runtime_string["maxLength"] == 500
+
+
+@pytest.mark.asyncio
+async def test_complete_receiving_accepts_empty_or_omitted_body_but_rejects_null() -> None:
+    class MissingShipmentSession:
+        async def get(self, _model, _shipment_id):
+            return None
+
+    async def no_principal():
+        return None
+
+    async def missing_shipment_session():
+        return MissingShipmentSession()
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[get_current_principal] = no_principal
+    app.dependency_overrides[get_db_session] = missing_shipment_session
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            url = f"/api/v1/shipments/{uuid4()}/receiving/complete"
+            headers = {"Idempotency-Key": "complete-body-shape"}
+            omitted = await client.post(url, headers=headers)
+            empty_object = await client.post(url, headers=headers, json={})
+            explicit_null = await client.post(
+                url,
+                headers={**headers, "content-type": "application/json"},
+                content="null",
+            )
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(original_overrides)
+
+    assert omitted.status_code == 404, omitted.text
+    assert empty_object.status_code == 404, empty_object.text
+    assert explicit_null.status_code == 422, explicit_null.text
 
 
 async def receive_container(
@@ -137,6 +497,29 @@ async def complete_receiving(
         headers={**authorization, "Idempotency-Key": key},
         json={},
     )
+
+
+async def complete_accepted_shipment(
+    client: AsyncClient, context: dict, key_prefix: str
+) -> tuple[dict[str, str], dict]:
+    lab_auth = await receive_first_container(context, client)
+    await record_result(
+        client,
+        context,
+        lab_auth,
+        context["containers"][0],
+        {"result": "ACCEPTED"},
+        f"{key_prefix}-result-{context['suffix']}",
+    )
+    completed = await complete_receiving(
+        client,
+        context,
+        lab_auth,
+        f"{key_prefix}-complete-{context['suffix']}",
+    )
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["status"] == "COMPLETED"
+    return lab_auth, completed.json()
 
 
 async def reopen_receiving(
@@ -1576,6 +1959,94 @@ async def test_concurrent_completion_serializes_on_shipment_and_only_one_transit
 
 
 @pytest.mark.asyncio
+async def test_completion_refreshes_shipment_version_after_waiting_for_row_lock() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        lab_auth = await receive_first_container(context, client)
+        await record_result(
+            client,
+            context,
+            lab_auth,
+            context["containers"][0],
+            {"result": "ACCEPTED"},
+            f"complete-stale-version-result-{context['suffix']}",
+        )
+
+        async with get_session_factory()() as session:
+            version_before = await session.scalar(
+                select(Shipment.version).where(Shipment.id == context["shipment_id"])
+            )
+        assert version_before is not None
+
+        owner_engine = create_async_engine(get_settings().migration_database_url)
+        completion_task: asyncio.Task | None = None
+        try:
+            async with owner_engine.connect() as connection:
+                transaction = await connection.begin()
+                await connection.execute(
+                    text("SELECT id FROM shipments WHERE id=:shipment_id FOR UPDATE"),
+                    {"shipment_id": context["shipment_id"]},
+                )
+                completion_task = asyncio.create_task(
+                    complete_receiving(
+                        client,
+                        context,
+                        lab_auth,
+                        f"complete-stale-version-finish-{context['suffix']}",
+                    )
+                )
+
+                pg_activity = []
+                for _ in range(250):
+                    waiting_for_shipment = await connection.scalar(
+                        text("""
+                        SELECT EXISTS (
+                          SELECT 1 FROM pg_stat_activity
+                          WHERE datname=current_database()
+                            AND wait_event_type='Lock'
+                            AND query NOT ILIKE '%pg_stat_activity%'
+                        )
+                        """)
+                    )
+                    if waiting_for_shipment:
+                        break
+                    pg_activity = list(
+                        await connection.execute(
+                            text("""
+                            SELECT pid, wait_event_type, wait_event, state, query
+                            FROM pg_stat_activity
+                            WHERE datname=current_database() AND pid <> pg_backend_pid()
+                            """)
+                        )
+                    )
+                    await asyncio.sleep(0.02)
+                assert waiting_for_shipment, (
+                    f"Completion did not wait on the Shipment row lock: {pg_activity}"
+                )
+
+                await connection.execute(
+                    text("UPDATE shipments SET version=version+1 WHERE id=:shipment_id"),
+                    {"shipment_id": context["shipment_id"]},
+                )
+                await transaction.commit()
+
+            response = await asyncio.wait_for(completion_task, timeout=10)
+        finally:
+            if completion_task is not None and not completion_task.done():
+                completion_task.cancel()
+                await asyncio.gather(completion_task, return_exceptions=True)
+            await owner_engine.dispose()
+
+    assert response.status_code == 200, response.text
+    assert response.json()["version"] == version_before + 2
+    async with get_session_factory()() as session:
+        stored_version = await session.scalar(
+            select(Shipment.version).where(Shipment.id == context["shipment_id"])
+        )
+    assert stored_version == version_before + 2
+
+
+@pytest.mark.asyncio
 async def test_concurrent_reopen_creates_only_one_next_session() -> None:
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         context = await create_pickup_fixture(client)
@@ -1732,8 +2203,20 @@ async def test_database_allows_valid_completion_and_reopen_transitions() -> None
             {"result": "ACCEPTED"},
             f"direct-lifecycle-accepted-{context['suffix']}",
         )
+        manager_auth = await authorize_lab_manager(context["shipment_id"], client)
 
     async with get_session_factory()() as session:
+        manager_id = await session.scalar(
+            select(Membership.user_id)
+            .join(Organization, Organization.id == Membership.organization_id)
+            .join(Shipment, Shipment.destination_organization_id == Organization.id)
+            .where(
+                Shipment.id == context["shipment_id"],
+                Membership.role == "LAB_MANAGER",
+                Membership.is_active.is_(True),
+            )
+        )
+        assert manager_id is not None
         await session.execute(
             text(
                 "UPDATE receiving_sessions SET status='CLOSED', closed_by=:actor, "
@@ -1758,7 +2241,7 @@ async def test_database_allows_valid_completion_and_reopen_transitions() -> None
             {
                 "id": uuid4(),
                 "shipment_id": context["shipment_id"],
-                "actor": context["sender_id"],
+                "actor": manager_id,
                 "reason": "Direct SQL reopen acceptance",
             },
         )
@@ -1783,6 +2266,7 @@ async def test_database_allows_valid_completion_and_reopen_transitions() -> None
     assert [row.sequence for row in receiving_sessions] == [1, 2]
     assert [row.status for row in receiving_sessions] == ["CLOSED", "OPEN"]
     assert receiving_sessions[1].reopen_reason == "Direct SQL reopen acceptance"
+    assert manager_auth
 
 
 @pytest.mark.asyncio
@@ -1897,8 +2381,20 @@ async def test_database_rejects_reopen_without_exactly_one_open_session_with_rea
             f"direct-reopen-complete-{context['suffix']}",
         )
         assert completed.status_code == 200, completed.text
+        manager_auth = await authorize_lab_manager(context["shipment_id"], client)
 
     async with get_session_factory()() as session:
+        manager_id = await session.scalar(
+            select(Membership.user_id)
+            .join(Organization, Organization.id == Membership.organization_id)
+            .join(Shipment, Shipment.destination_organization_id == Organization.id)
+            .where(
+                Shipment.id == context["shipment_id"],
+                Membership.role == "LAB_MANAGER",
+                Membership.is_active.is_(True),
+            )
+        )
+        assert manager_id is not None
         with pytest.raises(
             DBAPIError,
             match="Reopen requires exactly one OPEN receiving session with a reason",
@@ -1909,24 +2405,224 @@ async def test_database_rejects_reopen_without_exactly_one_open_session_with_rea
             )
         await session.rollback()
 
+        with pytest.raises(
+            DBAPIError,
+            match="Reopened receiving session requires a nonblank reason",
+        ):
+            await session.execute(
+                text(
+                    "INSERT INTO receiving_sessions "
+                    "(id, shipment_id, sequence, status, opened_by, opened_at, reopen_reason) "
+                    "VALUES (:id, :shipment_id, 2, 'OPEN', :actor, clock_timestamp(), '  ')"
+                ),
+                {
+                    "id": uuid4(),
+                    "shipment_id": context["shipment_id"],
+                    "actor": manager_id,
+                },
+            )
+        await session.rollback()
+    assert manager_auth
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "actor_kind",
+    [
+        "sender",
+        "wrong_scope_manager",
+        "inactive_membership",
+        "inactive_user",
+        "inactive_organization",
+        "inactive_region",
+    ],
+)
+async def test_database_rejects_reopen_session_without_active_destination_manager(
+    actor_kind: str,
+) -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        await complete_accepted_shipment(client, context, f"direct-invalid-opener-{actor_kind}")
+
+        if actor_kind == "wrong_scope_manager":
+            await create_wrong_scope_lab_manager(context["shipment_id"], client)
+        else:
+            await authorize_lab_manager(context["shipment_id"], client)
+
+    async with get_session_factory()() as session:
+        destination_id = await session.scalar(
+            select(Shipment.destination_organization_id).where(
+                Shipment.id == context["shipment_id"]
+            )
+        )
+        manager_query = select(Membership.user_id).where(Membership.role == "LAB_MANAGER")
+        if actor_kind == "wrong_scope_manager":
+            manager_query = manager_query.where(Membership.organization_id != destination_id)
+        else:
+            manager_query = manager_query.where(Membership.organization_id == destination_id)
+        manager_id = await session.scalar(manager_query)
+        assert destination_id is not None
+        assert manager_id is not None or actor_kind == "sender"
+        if actor_kind == "sender":
+            actor_id = context["sender_id"]
+        else:
+            actor_id = manager_id
+            if actor_kind.startswith("inactive_"):
+                if actor_kind == "inactive_membership":
+                    await session.execute(
+                        text("UPDATE memberships SET is_active=false WHERE user_id=:user_id"),
+                        {"user_id": actor_id},
+                    )
+                elif actor_kind == "inactive_user":
+                    await session.execute(
+                        text("UPDATE users SET is_active=false WHERE id=:user_id"),
+                        {"user_id": actor_id},
+                    )
+                elif actor_kind == "inactive_organization":
+                    await session.execute(
+                        text("UPDATE organizations SET is_active=false WHERE id=:organization_id"),
+                        {"organization_id": destination_id},
+                    )
+                else:
+                    region_id = await session.scalar(
+                        select(Shipment.region_id).where(Shipment.id == context["shipment_id"])
+                    )
+                    await session.execute(
+                        text("UPDATE regions SET is_active=false WHERE id=:region_id"),
+                        {"region_id": region_id},
+                    )
+        with pytest.raises(
+            DBAPIError,
+            match="Reopened receiving session opener must be an active destination LAB_MANAGER",
+        ):
+            await session.execute(
+                text(
+                    "INSERT INTO receiving_sessions "
+                    "(id, shipment_id, sequence, status, opened_by, opened_at, reopen_reason) "
+                    "VALUES (:id, :shipment_id, 2, 'OPEN', :actor, "
+                    "clock_timestamp(), 'Direct SQL test')"
+                ),
+                {
+                    "id": uuid4(),
+                    "shipment_id": context["shipment_id"],
+                    "actor": actor_id,
+                },
+            )
+        await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_database_rejects_regional_session_without_exceptional_evidence() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        await confirm_pickup(context, client)
+        async with get_session_factory()() as session:
+            region_id = await session.scalar(
+                select(Shipment.region_id).where(Shipment.id == context["shipment_id"])
+            )
+        assert region_id is not None
+        await authorize_regional_operator(str(region_id), client)
+
+    async with get_session_factory()() as session:
+        resolver_id = await session.scalar(
+            select(Membership.user_id).where(
+                Membership.region_id == region_id,
+                Membership.role == "REGIONAL_OPERATIONS",
+                Membership.is_active.is_(True),
+            )
+        )
+        assert resolver_id is not None
+        with pytest.raises(DBAPIError):
+            await session.execute(
+                text(
+                    "INSERT INTO receiving_sessions "
+                    "(id, shipment_id, sequence, status, opened_by, opened_at) "
+                    "VALUES (:id, :shipment_id, 1, 'OPEN', :actor, clock_timestamp())"
+                ),
+                {
+                    "id": uuid4(),
+                    "shipment_id": context["shipment_id"],
+                    "actor": resolver_id,
+                },
+            )
+        await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_database_rechecks_reopen_manager_membership_at_shipment_transition() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        await complete_accepted_shipment(client, context, "direct-recheck-reopen-opener")
+        await authorize_lab_manager(context["shipment_id"], client)
+
+    async with get_session_factory()() as session:
+        destination_id = await session.scalar(
+            select(Shipment.destination_organization_id).where(
+                Shipment.id == context["shipment_id"]
+            )
+        )
+        manager_id = await session.scalar(
+            select(Membership.user_id).where(
+                Membership.organization_id == destination_id,
+                Membership.role == "LAB_MANAGER",
+                Membership.is_active.is_(True),
+            )
+        )
+        assert manager_id is not None
         await session.execute(
             text(
                 "INSERT INTO receiving_sessions "
                 "(id, shipment_id, sequence, status, opened_by, opened_at, reopen_reason) "
-                "VALUES (:id, :shipment_id, 2, 'OPEN', :actor, clock_timestamp(), '  ')"
+                "VALUES (:id, :shipment_id, 2, 'OPEN', :actor, "
+                "clock_timestamp(), 'Active at insert')"
             ),
             {
                 "id": uuid4(),
                 "shipment_id": context["shipment_id"],
-                "actor": context["sender_id"],
+                "actor": manager_id,
             },
+        )
+        await session.execute(
+            text("UPDATE memberships SET is_active=false WHERE user_id=:user_id"),
+            {"user_id": manager_id},
         )
         with pytest.raises(
             DBAPIError,
-            match="Reopen requires exactly one OPEN receiving session with a reason",
+            match="Reopen requires an active destination LAB_MANAGER opener",
         ):
             await session.execute(
                 text("UPDATE shipments SET status='RECEIVING' WHERE id=:shipment_id"),
                 {"shipment_id": context["shipment_id"]},
+            )
+        await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_database_rejects_reopening_mutating_or_deleting_closed_receiving_session() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        await complete_accepted_shipment(client, context, "direct-closed-session")
+
+    async with get_session_factory()() as session:
+        session_id = await session.scalar(
+            select(ReceivingSessionModel.id).where(
+                ReceivingSessionModel.shipment_id == context["shipment_id"]
+            )
+        )
+        assert session_id is not None
+        with pytest.raises(DBAPIError, match="Closed receiving sessions are immutable"):
+            await session.execute(
+                text(
+                    "UPDATE receiving_sessions SET status='OPEN', closed_by=NULL, closed_at=NULL "
+                    "WHERE id=:session_id"
+                ),
+                {"session_id": session_id},
+            )
+        await session.rollback()
+
+        with pytest.raises(DBAPIError, match="Receiving sessions cannot be deleted"):
+            await session.execute(
+                text("DELETE FROM receiving_sessions WHERE id=:session_id"),
+                {"session_id": session_id},
             )
         await session.rollback()

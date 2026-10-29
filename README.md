@@ -1,6 +1,6 @@
 # LabTrack — медицинская логистика, архитектура и API
 
-**Текущая спецификация:** **LabTrack v0.6.1 — APPROVED / FROZEN для MVP** (19 решений hardening + все OPEN-01–04 утверждены 2026-11-01; машинный OpenAPI остаётся draft до проверки с API бизнес-сценариями).
+**Текущая спецификация:** **LabTrack v0.6.1 — APPROVED / FROZEN для MVP** (19 решений hardening + все OPEN-01–04 утверждены 2026-11-01; Stage F receiving operations согласованы со static OpenAPI и проверены, остальные MVP workflows остаются design contract).
 **Цель:** production-like MVP на синтетических данных, без реального медицинского документооборота.
 
 LabTrack — система прослеживаемости передачи лабораторных пробирок в маркированных контейнерах от медицинских учреждений через курьеров в одну центральную лабораторию пилотного региона.
@@ -15,7 +15,7 @@ LabTrack — система прослеживаемости передачи л
 4. **[PostgreSQL Data Model v0.6.1](docs/23-data-model-v061.md)** — новые таблицы, индексы, RBAC guards, транзакции, версии контейнеров.
 5. **[API & Operations v0.6.1](docs/24-api-and-operations-v061.md)** — draft deadline editing, notifications/inbox, аналитика UTC, staggered thresholds.
 6. **[Test Plan v0.6.1](docs/25-test-plan-v061.md)** — negative, security, concurrency, E2E и implementation gates.
-7. **[OpenAPI v0.6.1 draft](openapi/labtrack-v1.json)** — машинно-читаемый проект контракта, все exceptional endpoints согласованы для реализации и требуют автоматических security/concurrency тестов.
+7. **[OpenAPI v0.6.1](openapi/labtrack-v1.json)** — машинно-читаемый проект контракта; receiving operations Stage F согласованы с runtime и проверены, остальные workflows остаются нормативными требованиями.
 
 Нормативная база v0.6 для **неизменённых** сценариев остаётся действующей, особенно [частичная доставка](docs/16-domain-workflows-v06.md) и [основной DB design](docs/17-data-model-v06.md). При конфликте приоритет: **утверждённые решения v0.6.1 → нормативные v0.6.1 Domain/DB/API → неизменённые правила v0.6 → ранние версии**.
 
@@ -41,14 +41,11 @@ LabTrack — система прослеживаемости передачи л
 
 ## Статус и границы
 
-**Foundation / Stage A завершён:** typed runtime settings, async SQLAlchemy session, identity/scope schema, явный Alembic migration с проверкой drift, login с Argon2id и коротким identity-only JWT, проверка active memberships и scoped RBAC, `/health/live`, `/health/ready`, JSON request-correlated logs. Команды пользователя и scoped membership доступны оператору из backend CLI; проверки Foundation и Manifest описаны в [backend README](backend/README.md).
-**Этапы Foundation / A, Manifest / B, Pickup / C, нормальная per-container Delivery / D и Stage E реализованы.** Stage D добавляет bilateral Courier/Lab передачу контейнера, отзыв незавершённой попытки, историю и первую ReceivingSession. Stage E добавляет ContainerIssue с двухэтапным разрешением и CustodyIncident с exceptional receipt по двум независимым свидетельствам лаборатории; такой приём требует ранее подтверждённого Pickup и не подменяет Courier-подтверждение. PostgreSQL guards защищают custody-переходы и согласованность агрегата; подробности запуска и проверок находятся в [backend README](backend/README.md). Offline PWA и dashboards остаются последующими этапами. Пользователи и scoped memberships создаются оператором через `python -m app.cli` из `backend/`; публичного admin API нет.
-
 Все данные демонстрационные. Непрозрачные ссылки на ЛИС не гарантируют анонимность в реальном окружении. Перед реальным пилотом нужно отдельно подтвердить юридическую ответственность за физический контейнер, правила offline-разрешения, регламенты медицинской логистики, хранение данных, безопасность и процедуры восстановления.
 
 ## Локальное инфраструктурное окружение
 
-В Compose настроены PostgreSQL и Redis. Backend реализует Foundation и этапы Manifest, Pickup, per-container Delivery и Stage E: регистрацию Samples, DRAFT Shipments, контейнеры, bilateral handoff, разрешение проблем контейнеров и review exceptional receipt. Используются локальные образы `postgres:15` и `redis:7`; если какого-либо образа нет, запуск завершится ошибкой и не будет скачивать его.
+В Compose настроены PostgreSQL и Redis. Backend реализует Foundation, Manifest, Pickup, per-container Delivery и Stage E; Stage F receiving/reopening реализован в указанной feature branch. Используются локальные образы `postgres:15` и `redis:7`; если какого-либо образа нет, запуск завершится ошибкой и не будет скачивать его.
 
 ```bash
 test -f .env || cp .env.example .env
@@ -70,4 +67,4 @@ docker compose down
 
 ## Backend scaffold
 
-В `backend/` находится модульная структура FastAPI, реализующая этапы Foundation–Stage E. Версия Python для проекта — 3.12. Установка, миграция и запуск описаны в [backend/README.md](backend/README.md). Следующие крупные задачи — обработка результатов пробирок и offline workflows.
+В `backend/` находится модульная структура FastAPI для этапов Foundation–Stage F. Версия Python для проекта — 3.12. Установка, миграция и запуск описаны в [backend/README.md](backend/README.md). После завершения pending whole-branch review следующими остаются Stage G offline PWA и Stage H product finish.
