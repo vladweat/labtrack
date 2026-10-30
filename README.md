@@ -67,4 +67,4 @@ docker compose down
 
 ## Backend scaffold
 
-В `backend/` находится модульная структура FastAPI для этапов Foundation–Stage F. Версия Python для проекта — 3.12. Установка, миграция и запуск описаны в [backend/README.md](backend/README.md). После завершения pending whole-branch review следующими остаются Stage G offline PWA и Stage H product finish.
+В `backend/` находится модульная структура FastAPI для этапов Foundation–Stage F. Версия Python для проекта — 3.12. Установка, миграция и запуск описаны в [backend/README.md](backend/README.md). После Stage F следующими остаются Stage G offline PWA и Stage H product finish.
