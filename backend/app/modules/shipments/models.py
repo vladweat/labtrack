@@ -4,6 +4,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -51,6 +52,7 @@ class Shipment(Base):
             "AND closure_reason IS NULL)",
             name="closure_fields",
         ),
+        CheckConstraint("pickup_state_version > 0", name="positive_pickup_state_version"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -65,6 +67,9 @@ class Shipment(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
     manifest_revision: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("1")
+    )
+    pickup_state_version: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("1")
     )
     expected_delivery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sealed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -115,7 +120,7 @@ class TransportContainer(Base):
     )
     received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     received_by: Mapped[UUID | None] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
-    state_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("1"))
+    state_version: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("1"))
     receipt_evidence: Mapped[dict | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     shipment: Mapped[Shipment] = relationship(back_populates="containers")
@@ -227,6 +232,42 @@ class Handoff(Base):
     withdrawal_reason: Mapped[str | None] = mapped_column(String(500))
     superseded_by_incident_id: Mapped[UUID | None] = mapped_column(Uuid)
     superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CourierManifestSnapshot(Base):
+    """Server-issued, immutable PHI-free state cut for a Courier manifest."""
+
+    __tablename__ = "courier_manifest_snapshots"
+    __table_args__ = (
+        CheckConstraint("manifest_revision > 0", name="positive_manifest_revision"),
+        CheckConstraint("pickup_state_version > 0", name="positive_pickup_state_version"),
+        CheckConstraint(
+            "is_phi_free_offline_container_payload(container_payload)",
+            name="phi_free_container_payload",
+        ),
+        Index("ix_courier_manifest_snapshots_shipment_issued", "shipment_id", "issued_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    actor_user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    assigned_courier_user_id: Mapped[UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    shipment_id: Mapped[UUID] = mapped_column(
+        ForeignKey("shipments.id", ondelete="RESTRICT"), nullable=False
+    )
+    region_id: Mapped[UUID] = mapped_column(
+        ForeignKey("regions.id", ondelete="RESTRICT"), nullable=False
+    )
+    manifest_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    pickup_state_version: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.clock_timestamp(), nullable=False
+    )
+    policy_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    container_payload: Mapped[list[dict]] = mapped_column(JSONB, nullable=False)
 
 
 class ReceivingSession(Base):

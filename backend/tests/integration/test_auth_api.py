@@ -152,4 +152,4 @@ async def test_database_migration_revision_is_applied(database_sessions) -> None
     async with database_sessions() as session:
         revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
 
-    assert revision == "0008_stage_f_integrity"
+    assert revision == "0009_stage_g_offline"

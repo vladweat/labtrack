@@ -188,8 +188,8 @@ def test_stage_f_migration_is_additive_after_stage_e() -> None:
     revision = script.get_revision(head)
     stage_f_revision = script.get_revision("0006_stage_f")
 
-    assert revision.revision == "0008_stage_f_integrity"
-    assert revision.down_revision == "0007_stage_f_lifecycle"
+    assert revision.revision == "0009_stage_g_offline"
+    assert revision.down_revision == "0008_stage_f_integrity"
     assert script.get_revision("0007_stage_f_lifecycle").down_revision == "0006_stage_f"
     assert stage_f_revision.down_revision == "0005_stage_e"
 
