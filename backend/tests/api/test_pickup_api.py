@@ -1,8 +1,9 @@
 import asyncio
 import json
 from datetime import UTC, datetime, timedelta
+from importlib import import_module, util
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -16,10 +17,17 @@ from app.db.session import get_session_factory
 from app.main import app
 from app.modules.audit.models import AuditEvent
 from app.modules.idempotency.models import IdempotencyRecord
+from app.modules.identity.access import MembershipGrant, Principal
 from app.modules.identity.models import Membership, Organization, Region, User
 from app.modules.shipments.models import Handoff, Shipment, TransportContainer
 
 PASSWORD = "Pickup Test Password 2026!"
+
+
+def shared_courier_command(name: str):
+    module_name = "app.modules.shipments.commands"
+    assert util.find_spec(module_name) is not None, "shared custody commands module is missing"
+    return getattr(import_module(module_name), name)
 
 
 def test_stage_c_openapi_shapes_match_the_design_contract() -> None:
@@ -626,3 +634,57 @@ async def test_audit_failure_rolls_back_pickup_handoff_state_and_idempotency() -
             )
             == 0
         )
+
+
+@pytest.mark.asyncio
+async def test_shared_pickup_command_preserves_courier_confirmation_contract() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client, container_count=2)
+        codes = [item["code"] for item in context["containers"]]
+        release = await client.post(
+            f"/api/v1/shipments/{context['shipment_id']}/handoffs/pickup/confirm-release",
+            headers={
+                **context["sender_auth"],
+                "Idempotency-Key": f"shared-pickup-release-{context['suffix']}",
+            },
+            json={"container_codes": codes},
+        )
+        assert release.status_code == 200, release.text
+
+        confirm_pickup_command = shared_courier_command("confirm_pickup_command")
+        async with get_session_factory()() as session:
+            shipment = await session.get(Shipment, UUID(context["shipment_id"]))
+            courier = await session.get(User, context["courier_id"])
+            assert shipment is not None and courier is not None
+            principal = Principal(
+                user_id=courier.id,
+                email=courier.email,
+                display_name=courier.display_name,
+                memberships=(
+                    MembershipGrant("COURIER", organization_id=None, region_id=shipment.region_id),
+                ),
+            )
+            status_code, body = await confirm_pickup_command(
+                session, principal, UUID(context["shipment_id"]), codes
+            )
+            await session.commit()
+
+        assert status_code == 200
+        assert body["shipment_id"] == context["shipment_id"]
+        assert body["shipment_status"] == "IN_TRANSIT"
+        assert body["handoff"]["kind"] == "PICKUP"
+        assert body["handoff"]["status"] == "CONFIRMED"
+        assert body["handoff"]["initiated_by"] == str(context["sender_id"])
+        assert body["handoff"]["confirmed_by"] == str(context["courier_id"])
+        assert body["container_id"] is None
+        assert body["container_status"] is None
+
+        async with get_session_factory()() as session:
+            statuses = list(
+                await session.scalars(
+                    select(TransportContainer.delivery_status).where(
+                        TransportContainer.shipment_id == context["shipment_id"]
+                    )
+                )
+            )
+            assert statuses == ["IN_TRANSIT"] * len(context["containers"])

@@ -462,6 +462,38 @@ class ManifestResponse(BaseModel):
     containers: list[ContainerResponse]
 
 
+class CourierOfflineManifestContainer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: UUID
+    code: str
+    delivery_status: ContainerStatus
+    state_version: int = Field(ge=1)
+
+
+class CourierOfflineManifest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    shipment_id: UUID
+    manifest_revision: int = Field(ge=0)
+    status: ShipmentStatus
+    container_codes: list[str] = Field(min_length=1, json_schema_extra={"uniqueItems": True})
+    cached_at: AwareDatetime = Field(
+        description="Legacy response field, not authoritative issuance timestamp; use issued_at"
+    )
+    containers: list[CourierOfflineManifestContainer]
+    snapshot_id: UUID
+    issued_at: AwareDatetime
+    pickup_state_version: int = Field(ge=1)
+
+    @field_validator("container_codes")
+    @classmethod
+    def unique_container_codes(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("container_codes must be unique")
+        return value
+
+
 class AcceptedReceiptResultRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

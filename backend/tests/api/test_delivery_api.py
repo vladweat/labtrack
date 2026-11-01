@@ -1,6 +1,7 @@
 """Normal per-container Delivery and partial-receipt acceptance tests."""
 
 import json
+from importlib import import_module, util
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -16,8 +17,15 @@ from app.core.security import hash_password
 from app.db.session import get_session_factory
 from app.main import app
 from app.modules.audit.models import AuditEvent
+from app.modules.identity.access import MembershipGrant, Principal
 from app.modules.identity.models import Membership, Organization, User
 from app.modules.shipments.models import ContainerItem, Shipment, TransportContainer
+
+
+def shared_courier_command(name: str):
+    module_name = "app.modules.shipments.commands"
+    assert util.find_spec(module_name) is not None, "shared custody commands module is missing"
+    return getattr(import_module(module_name), name)
 
 
 def test_delivery_schema_is_an_additive_migration_after_pickup() -> None:
@@ -392,3 +400,47 @@ async def test_database_rejects_direct_receipt_without_a_confirmed_delivery() ->
                 ),
                 {"courier": context["courier_id"], "container": context["container_id"]},
             )
+
+
+@pytest.mark.asyncio
+async def test_shared_delivery_command_preserves_online_handoff_contract() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        await confirm_pickup(context, client)
+        container = context["containers"][0]
+
+        initiate_delivery_command = shared_courier_command("initiate_container_delivery_command")
+        async with get_session_factory()() as session:
+            shipment = await session.get(Shipment, UUID(context["shipment_id"]))
+            courier = await session.get(User, context["courier_id"])
+            assert shipment is not None and courier is not None
+            principal = Principal(
+                user_id=courier.id,
+                email=courier.email,
+                display_name=courier.display_name,
+                memberships=(
+                    MembershipGrant("COURIER", organization_id=None, region_id=shipment.region_id),
+                ),
+            )
+            status_code, body = await initiate_delivery_command(
+                session,
+                principal,
+                UUID(context["shipment_id"]),
+                UUID(container["id"]),
+                container["code"],
+            )
+            await session.commit()
+
+        assert status_code == 200
+        assert body["shipment_id"] == context["shipment_id"]
+        assert body["shipment_status"] == "DELIVERY_PENDING"
+        assert body["handoff"]["kind"] == "DELIVERY"
+        assert body["handoff"]["status"] == "PENDING"
+        assert body["handoff"]["initiated_by"] == str(context["courier_id"])
+        assert body["container_id"] == container["id"]
+        assert body["container_status"] == "DELIVERY_PENDING"
+
+        async with get_session_factory()() as session:
+            row = await session.get(TransportContainer, UUID(container["id"]))
+            assert row is not None
+            assert row.delivery_status == "DELIVERY_PENDING"

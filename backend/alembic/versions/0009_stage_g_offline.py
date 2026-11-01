@@ -26,6 +26,31 @@ def upgrade() -> None:
         "shipments",
         "pickup_state_version > 0",
     )
+    op.execute("""
+    CREATE FUNCTION guard_pickup_state_version() RETURNS trigger AS $$
+    BEGIN
+      IF TG_OP = 'INSERT' THEN
+        IF NEW.pickup_state_version <> 1 THEN
+          RAISE EXCEPTION 'Pickup state version must start at 1';
+        END IF;
+        RETURN NEW;
+      END IF;
+      IF NEW.pickup_state_version IS DISTINCT FROM OLD.pickup_state_version THEN
+        IF pg_trigger_depth() <> 2 THEN
+          RAISE EXCEPTION 'Pickup state version is database-managed';
+        END IF;
+        IF NEW.pickup_state_version <> OLD.pickup_state_version + 1 THEN
+          RAISE EXCEPTION 'Pickup state version must increment by exactly one';
+        END IF;
+      END IF;
+      RETURN NEW;
+    END; $$ LANGUAGE plpgsql
+    """)
+    op.execute("""
+    CREATE TRIGGER trg_guard_pickup_state_version
+    BEFORE INSERT OR UPDATE ON shipments
+    FOR EACH ROW EXECUTE FUNCTION guard_pickup_state_version()
+    """)
     op.alter_column(
         "transport_containers",
         "state_version",
@@ -243,6 +268,8 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("DROP TRIGGER IF EXISTS trg_increment_pickup_state_version ON handoffs")
     op.execute("DROP FUNCTION IF EXISTS increment_pickup_state_version()")
+    op.execute("DROP TRIGGER IF EXISTS trg_guard_pickup_state_version ON shipments")
+    op.execute("DROP FUNCTION IF EXISTS guard_pickup_state_version()")
     op.execute(
         "DROP TRIGGER IF EXISTS trg_guard_offline_command_tombstone ON offline_command_tombstones"
     )
