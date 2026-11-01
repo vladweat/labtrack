@@ -1,0 +1,39 @@
+{
+  "name": "labtrack-courier-pwa",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13 <23"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "lint": "eslint . --max-warnings=0",
+    "test:unit": "vitest run",
+    "test:e2e": "playwright test",
+    "check": "npm run lint && npm run test:unit && npm run build && npm run test:e2e"
+  },
+  "dependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.64.1",
+    "@types/node": "22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.2.1",
+    "eslint": "10.14.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "eslint-plugin-react-refresh": "0.5.7",
+    "globals": "17.14.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.1",
+    "vite": "8.3.5",
+    "vite-plugin-pwa": "2.0.0",
+    "vitest": "5.0.5"
+  }
+}
