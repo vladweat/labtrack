@@ -9,6 +9,7 @@ from uuid import UUID
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app.db.session import dispose_engine, get_session_factory
+from app.modules.idempotency.service import compact_offline_replays
 from app.modules.identity.provisioning import (
     ALL_ROLES,
     ProvisioningError,
@@ -31,6 +32,9 @@ def build_parser() -> argparse.ArgumentParser:
     grant.add_argument("--email", required=True)
     grant.add_argument("--role", required=True, choices=sorted(ALL_ROLES))
     _add_scope_arguments(grant)
+    commands.add_parser(
+        "compact-offline-replays", help="compact Courier replay detail older than 90 days"
+    )
     return parser
 
 
@@ -52,10 +56,12 @@ def _prompt_password() -> str:
     return password
 
 
-async def _execute(args: argparse.Namespace, password: str | None) -> UUID:
+async def _execute(args: argparse.Namespace, password: str | None) -> UUID | int:
     try:
         async with get_session_factory()() as session:
             async with session.begin():
+                if args.command == "compact-offline-replays":
+                    return await compact_offline_replays(session)
                 if args.command == "provision-user":
                     assert password is not None
                     user = await provision_user(
@@ -97,6 +103,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.command == "provision-user":
         print(f"User provisioned: {args.email.strip().casefold()} (id={resource_id})")
+    elif args.command == "compact-offline-replays":
+        print(f"Offline replay details compacted: {resource_id}")
     else:
         print(f"Membership granted (id={resource_id})")
     return 0

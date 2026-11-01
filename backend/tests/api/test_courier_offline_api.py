@@ -710,3 +710,773 @@ async def test_pickup_and_container_versions_advance_with_custody_transitions() 
 
         assert final_pickup_version == pickup_confirmed_version
         assert final_container_version == transit_container_version + 2
+
+
+async def offline_ready(client, *, container_count=1):
+    context = await create_pickup_fixture(client, container_count=container_count)
+    release = await client.post(
+        f"/api/v1/shipments/{context['shipment_id']}/handoffs/pickup/confirm-release",
+        headers={**context["sender_auth"], "Idempotency-Key": str(uuid4())},
+        json={"container_codes": [c["code"] for c in context["containers"]]},
+    )
+    assert release.status_code == 200, release.text
+    response = await client.get(
+        f"/api/v1/courier/shipments/{context['shipment_id']}/offline-manifest",
+        headers=context["courier_auth"],
+    )
+    assert response.status_code == 200, response.text
+    return context, response.json()
+
+
+def pickup_command(snapshot):
+    return {
+        "client_command_id": str(uuid4()),
+        "shipment_id": snapshot["shipment_id"],
+        "action": "COURIER_CONFIRM_PICKUP",
+        "container_codes": snapshot["container_codes"],
+        "expected_manifest_version": snapshot["manifest_revision"],
+        "expected_target_state_version": snapshot["pickup_state_version"],
+        "client_performed_at": "2000-01-01T00:00:00Z",
+        "snapshot_id": snapshot["snapshot_id"],
+    }
+
+
+def delivery_command(snapshot, *, predecessor=None, container_index=0):
+    container = snapshot["containers"][container_index]
+    command = {
+        "client_command_id": str(uuid4()),
+        "shipment_id": snapshot["shipment_id"],
+        "action": "COURIER_INITIATE_CONTAINER_DELIVERY",
+        "container_id": container["id"],
+        "container_code": container["code"],
+        "expected_manifest_version": snapshot["manifest_revision"],
+        "expected_target_state_version": container["state_version"],
+        "client_performed_at": "2099-01-01T00:00:00Z",
+        "snapshot_id": snapshot["snapshot_id"],
+    }
+    if predecessor:
+        command["depends_on_command_id"] = predecessor
+    return command
+
+
+async def sync_commands(client, context, commands):
+    response = await client.post(
+        "/api/v1/courier/sync", headers=context["courier_auth"], json={"commands": commands}
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["results"]
+
+
+async def offline_counts(command_id):
+    async with get_session_factory()() as session:
+        return tuple(
+            [
+                await session.scalar(text(sql), {"key": command_id})
+                for sql in (
+                    "SELECT count(*) FROM idempotency_records "
+                    "WHERE operation='courier_offline_command' AND key=:key",
+                    "SELECT count(*) FROM offline_command_tombstones WHERE client_command_id=:key",
+                    "SELECT count(*) FROM audit_events "
+                    "WHERE operation='courier_offline_command' AND request_key=:key",
+                )
+            ]
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("split_batch", [False, True])
+async def test_sync_linked_pickup_delivery_replay_and_authoritative_time(split_batch):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context, snapshot = await offline_ready(client)
+        pickup = pickup_command(snapshot)
+        delivery = delivery_command(snapshot, predecessor=pickup["client_command_id"])
+        started = datetime.now(UTC)
+        if split_batch:
+            first = await sync_commands(client, context, [pickup])
+            second = await sync_commands(client, context, [pickup, delivery])
+            assert second[0]["outcome"] == "ALREADY_APPLIED"
+            results = [first[0], second[1]]
+        else:
+            results = await sync_commands(client, context, [pickup, delivery])
+        assert [r["outcome"] for r in results] == ["APPLIED", "APPLIED"]
+        assert [r["server_status"] for r in results] == ["IN_TRANSIT", "DELIVERY_PENDING"]
+        for command, result in zip([pickup, delivery], results, strict=True):
+            assert datetime.fromisoformat(result["recorded_at"].replace("Z", "+00:00")) >= started
+            assert datetime.fromisoformat(
+                result["client_performed_at"].replace("Z", "+00:00")
+            ) == datetime.fromisoformat(command["client_performed_at"].replace("Z", "+00:00"))
+            assert await offline_counts(command["client_command_id"]) == (1, 1, 1)
+        replay = await sync_commands(client, context, [pickup, delivery])
+        assert [r["outcome"] for r in replay] == ["ALREADY_APPLIED", "ALREADY_APPLIED"]
+        assert [r["original_outcome"] for r in replay] == ["APPLIED", "APPLIED"]
+        assert [r["recorded_at"] for r in replay] == [r["recorded_at"] for r in results]
+        async with get_session_factory()() as session:
+            count = await session.scalar(
+                text("SELECT count(*) FROM handoffs WHERE shipment_id=:id"),
+                {"id": context["shipment_id"]},
+            )
+        assert count == 2
+
+
+@pytest.mark.asyncio
+async def test_sync_missing_predecessor_is_retryable_then_applies_in_array_order():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context, snapshot = await offline_ready(client)
+        pickup = pickup_command(snapshot)
+        delivery = delivery_command(snapshot, predecessor=pickup["client_command_id"])
+        results = await sync_commands(client, context, [delivery, pickup])
+        assert [r["outcome"] for r in results] == ["RETRYABLE", "APPLIED"]
+        assert results[0]["recorded_at"] is None
+        assert await offline_counts(delivery["client_command_id"]) == (0, 0, 0)
+        assert (await sync_commands(client, context, [delivery]))[0]["outcome"] == "APPLIED"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode", ["unlinked", "rejected", "different_snapshot", "delivery_predecessor"]
+)
+async def test_sync_delivery_rejects_invalid_causal_dependency(mode):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context, snapshot = await offline_ready(client)
+        pickup = pickup_command(snapshot)
+        if mode == "rejected":
+            pickup["container_codes"] = ["wrong-sealed-code"]
+        first = (await sync_commands(client, context, [pickup]))[0]
+        assert first["outcome"] == ("REJECTED" if mode == "rejected" else "APPLIED")
+        if mode == "different_snapshot":
+            response = await client.get(
+                f"/api/v1/courier/shipments/{context['shipment_id']}/offline-manifest",
+                headers=context["courier_auth"],
+            )
+            snapshot = response.json()
+        delivery = delivery_command(
+            snapshot, predecessor=None if mode == "unlinked" else pickup["client_command_id"]
+        )
+        if mode == "delivery_predecessor":
+            assert (await sync_commands(client, context, [delivery]))[0]["outcome"] == "APPLIED"
+            delivery = delivery_command(snapshot, predecessor=delivery["client_command_id"])
+        result = (await sync_commands(client, context, [delivery]))[0]
+        assert result["outcome"] == "REJECTED"
+        assert result["error"]["code"] in {"OFFLINE_COMMAND_STALE", "INVALID_DEPENDENCY"}
+        assert await offline_counts(delivery["client_command_id"]) == (1, 1, 1)
+        replay = (await sync_commands(client, context, [delivery]))[0]
+        assert replay["outcome"] == "ALREADY_APPLIED"
+        assert replay["original_outcome"] == "REJECTED"
+        assert replay["error"] == result["error"]
+
+
+@pytest.mark.asyncio
+async def test_sync_changed_payload_cannot_reuse_applied_or_rejected_id():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context, snapshot = await offline_ready(client)
+        pickup = pickup_command(snapshot)
+        assert (await sync_commands(client, context, [pickup]))[0]["outcome"] == "APPLIED"
+        changed = {**pickup, "client_performed_at": "2001-01-01T00:00:00Z"}
+        result = (await sync_commands(client, context, [changed]))[0]
+        assert result["outcome"] == "REJECTED"
+        assert result["error"]["code"] == "IDEMPOTENCY_KEY_REUSED"
+        assert await offline_counts(pickup["client_command_id"]) == (1, 1, 1)
+        rejected = pickup_command(snapshot)
+        assert (await sync_commands(client, context, [rejected]))[0]["outcome"] == "REJECTED"
+        rejected["container_codes"] = ["changed-code"]
+        assert (await sync_commands(client, context, [rejected]))[0]["error"][
+            "code"
+        ] == "IDEMPOTENCY_KEY_REUSED"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revocation", ["membership", "unassigned_actor", "user"])
+async def test_sync_checks_current_authorization_before_replay(revocation):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context, snapshot = await offline_ready(client)
+        pickup = pickup_command(snapshot)
+        assert (await sync_commands(client, context, [pickup]))[0]["outcome"] == "APPLIED"
+        auth = context["courier_auth"]
+        if revocation == "unassigned_actor":
+            _, auth = await authorize_unassigned_courier(context["shipment_id"], client)
+        else:
+            async with get_session_factory()() as session:
+                sql = (
+                    "UPDATE memberships SET is_active=false WHERE user_id=:id AND role='COURIER'"
+                    if revocation == "membership"
+                    else "UPDATE users SET is_active=false WHERE id=:id"
+                )
+                await session.execute(text(sql), {"id": context["courier_id"]})
+                await session.commit()
+        response = await client.post(
+            "/api/v1/courier/sync", headers=auth, json={"commands": [pickup]}
+        )
+        if revocation == "user":
+            assert response.status_code == 401
+        else:
+            assert response.status_code == 200
+            result = response.json()["results"][0]
+            assert result["outcome"] == "REJECTED"
+            assert result["error"]["code"] == "RESOURCE_NOT_FOUND"
+            assert result["recorded_at"] is None
+        assert await offline_counts(pickup["client_command_id"]) == (1, 1, 1)
+
+
+@pytest.mark.asyncio
+async def test_sync_old_server_snapshot_requires_stored_review_without_custody_mutation(
+    monkeypatch,
+):
+    from app.modules.shipments import offline
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context, snapshot = await offline_ready(client)
+        command = pickup_command(snapshot)
+        assert hasattr(offline, "server_now"), "sync server clock seam is missing"
+        clock = offline.server_now
+
+        async def old_clock(session):
+            return await clock(session) + timedelta(hours=25)
+
+        monkeypatch.setattr(offline, "server_now", old_clock)
+        command["client_performed_at"] = datetime.now(UTC).isoformat()
+        result = (await sync_commands(client, context, [command]))[0]
+        assert result["outcome"] == "REVIEW_REQUIRED"
+        assert result["error"]["code"] == "OFFLINE_SNAPSHOT_EXPIRED"
+        assert await offline_counts(command["client_command_id"]) == (1, 1, 1)
+        monkeypatch.setattr(offline, "server_now", clock)
+        replay = (await sync_commands(client, context, [command]))[0]
+        assert replay["original_outcome"] == "REVIEW_REQUIRED"
+        async with get_session_factory()() as session:
+            assert (
+                await session.scalar(
+                    text("SELECT status FROM shipments WHERE id=:id"),
+                    {"id": context["shipment_id"]},
+                )
+                == "PICKUP_PENDING"
+            )
+
+
+@pytest.mark.asyncio
+async def test_sync_pickup_aba_is_stale_and_unrelated_shipment_update_is_eligible():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context, snapshot = await offline_ready(client)
+        async with get_session_factory()() as session:
+            await session.execute(
+                text("UPDATE shipments SET version=version+1 WHERE id=:id"),
+                {"id": context["shipment_id"]},
+            )
+            await session.commit()
+        assert (await sync_commands(client, context, [pickup_command(snapshot)]))[0][
+            "outcome"
+        ] == "APPLIED"
+        assert (await sync_commands(client, context, [pickup_command(snapshot)]))[0]["error"][
+            "code"
+        ] == "OFFLINE_COMMAND_STALE"
+        context, snapshot = await offline_ready(client)
+        url = f"/api/v1/shipments/{context['shipment_id']}/handoffs/pickup"
+        withdrawn = await client.post(
+            f"{url}/withdraw",
+            headers={**context["sender_auth"], "Idempotency-Key": str(uuid4())},
+            json={"reason": "No physical release"},
+        )
+        assert withdrawn.status_code == 200, withdrawn.text
+        release = await client.post(
+            f"{url}/confirm-release",
+            headers={**context["sender_auth"], "Idempotency-Key": str(uuid4())},
+            json={"container_codes": snapshot["container_codes"]},
+        )
+        assert release.status_code == 200, release.text
+        result = (await sync_commands(client, context, [pickup_command(snapshot)]))[0]
+        assert result["error"]["code"] == "OFFLINE_COMMAND_STALE"
+
+
+@pytest.mark.asyncio
+async def test_sync_delivery_target_aba_invalidates_link_and_new_snapshot_can_apply():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context, snapshot = await offline_ready(client)
+        pickup = pickup_command(snapshot)
+        assert (await sync_commands(client, context, [pickup]))[0]["outcome"] == "APPLIED"
+        container = snapshot["containers"][0]
+        url = (
+            f"/api/v1/shipments/{context['shipment_id']}/containers/"
+            f"{container['id']}/handoffs/delivery"
+        )
+        for action, body in [
+            ("confirm-delivery", {"container_code": container["code"]}),
+            ("withdraw", {"reason": "Retry"}),
+        ]:
+            response = await client.post(
+                f"{url}/{action}",
+                headers={**context["courier_auth"], "Idempotency-Key": str(uuid4())},
+                json=body,
+            )
+            assert response.status_code == 200, response.text
+        result = (
+            await sync_commands(
+                client,
+                context,
+                [delivery_command(snapshot, predecessor=pickup["client_command_id"])],
+            )
+        )[0]
+        assert result["error"]["code"] == "OFFLINE_COMMAND_STALE"
+        fresh = await client.get(
+            f"/api/v1/courier/shipments/{context['shipment_id']}/offline-manifest",
+            headers=context["courier_auth"],
+        )
+        async with get_session_factory()() as session:
+            await session.execute(
+                text("UPDATE shipments SET version=version+1 WHERE id=:id"),
+                {"id": context["shipment_id"]},
+            )
+            await session.commit()
+        assert (await sync_commands(client, context, [delivery_command(fresh.json())]))[0][
+            "outcome"
+        ] == "APPLIED"
+
+
+@pytest.mark.asyncio
+async def test_sync_batch_validates_all_commands_before_any_commit():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context, snapshot = await offline_ready(client)
+        pickup = pickup_command(snapshot)
+        for commands in [
+            [],
+            [pickup] * 21,
+            [pickup, {**pickup, "action": "UNKNOWN"}],
+            [{**pickup, "client_performed_at": "2026-01-01"}],
+            [{**pickup, "container_codes": ["duplicate", "duplicate"]}],
+        ]:
+            response = await client.post(
+                "/api/v1/courier/sync", headers=context["courier_auth"], json={"commands": commands}
+            )
+            assert response.status_code == 422, response.text
+            assert await offline_counts(pickup["client_command_id"]) == (0, 0, 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", ["transient", "audit"])
+async def test_sync_later_failure_rolls_back_only_current_command(monkeypatch, fault):
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session
+
+    from app.modules.shipments import offline
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context, snapshot = await offline_ready(client)
+        pickup = pickup_command(snapshot)
+        delivery = delivery_command(snapshot, predecessor=pickup["client_command_id"])
+        assert hasattr(offline, "initiate_container_delivery_command"), (
+            "offline command integration missing"
+        )
+        if fault == "transient":
+            real = offline.initiate_container_delivery_command
+
+            async def interrupted(*args, **kwargs):
+                await real(*args, **kwargs)
+                from sqlalchemy.exc import OperationalError
+
+                raise OperationalError("connection interrupted", {}, Exception("transient"))
+
+            monkeypatch.setattr(offline, "initiate_container_delivery_command", interrupted)
+        else:
+            from app.modules.audit.models import AuditEvent
+
+            def fail_delivery_audit(session, flush_context, instances):
+                if any(
+                    isinstance(row, AuditEvent) and row.request_key == delivery["client_command_id"]
+                    for row in session.new
+                ):
+                    raise RuntimeError("injected audit failure")
+
+            event.listen(Session, "before_flush", fail_delivery_audit)
+        try:
+            results = await sync_commands(client, context, [pickup, delivery])
+        finally:
+            if fault == "audit":
+                event.remove(Session, "before_flush", fail_delivery_audit)
+        assert [r["outcome"] for r in results] == ["APPLIED", "RETRYABLE"]
+        assert await offline_counts(pickup["client_command_id"]) == (1, 1, 1)
+        assert await offline_counts(delivery["client_command_id"]) == (0, 0, 0)
+        async with get_session_factory()() as session:
+            assert (
+                await session.scalar(
+                    text("SELECT delivery_status FROM transport_containers WHERE id=:id"),
+                    {"id": snapshot["containers"][0]["id"]},
+                )
+                == "IN_TRANSIT"
+            )
+        monkeypatch.undo()
+        assert (await sync_commands(client, context, [delivery]))[0]["outcome"] == "APPLIED"
+
+
+@pytest.mark.asyncio
+async def test_sync_compaction_preserves_tombstone_identity_replay_and_minimum_retention():
+    from app.modules.idempotency import service
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context, snapshot = await offline_ready(client)
+        command = pickup_command(snapshot)
+        original = (await sync_commands(client, context, [command]))[0]
+        assert hasattr(service, "compact_offline_replays"), "offline compaction missing"
+        async with get_session_factory()() as session:
+            # A corrupt/early expiry must not shorten the promised 90-day retention.
+            await session.execute(
+                text(
+                    "UPDATE idempotency_records SET offline_retention_expires_at=now() "
+                    "WHERE operation='courier_offline_command' AND key=:id"
+                ),
+                {"id": command["client_command_id"]},
+            )
+            assert await service.compact_offline_replays(session) == 0
+            await session.commit()
+            before = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT * FROM offline_command_tombstones WHERE client_command_id=:id"
+                        ),
+                        {"id": command["client_command_id"]},
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            assert (
+                await service.compact_offline_replays(
+                    session, as_of=datetime.now(UTC) + timedelta(days=91)
+                )
+                == 1
+            )
+            await session.commit()
+            after = (
+                (
+                    await session.execute(
+                        text(
+                            "SELECT * FROM offline_command_tombstones WHERE client_command_id=:id"
+                        ),
+                        {"id": command["client_command_id"]},
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            assert dict(before) == dict(after)
+        assert await offline_counts(command["client_command_id"]) == (0, 1, 1)
+        replay = (await sync_commands(client, context, [command]))[0]
+        assert replay["outcome"] == "ALREADY_APPLIED"
+        assert replay["original_outcome"] == "APPLIED"
+        assert replay["recorded_at"] == original["recorded_at"]
+        changed = {**command, "container_codes": ["changed"]}
+        assert (await sync_commands(client, context, [changed]))[0]["error"][
+            "code"
+        ] == "IDEMPOTENCY_KEY_REUSED"
+        assert await offline_counts(command["client_command_id"]) == (0, 1, 1)
+        from app.cli import build_parser
+
+        assert (
+            build_parser().parse_args(["compact-offline-replays"]).command
+            == "compact-offline-replays"
+        )
+
+
+def test_sync_runtime_openapi_matches_static_contract():
+    contract = json.loads(
+        (Path(__file__).resolve().parents[3] / "openapi/labtrack-v1.json").read_text()
+    )
+    runtime = app.openapi()
+    path = "/courier/sync"
+    assert f"/api/v1{path}" in runtime["paths"], "sync route is missing"
+    actual = runtime["paths"][f"/api/v1{path}"]["post"]
+    expected = contract["paths"][path]["post"]
+    assert actual["operationId"] == expected["operationId"] == "syncCourierOfflineCommands"
+    assert actual["requestBody"] == expected["requestBody"]
+    assert actual["responses"] == expected["responses"]
+    for name in [
+        "CourierOfflinePickupCommand",
+        "CourierOfflineContainerDeliveryCommand",
+        "CourierSyncRequest",
+        "CourierSyncError",
+        "CourierSyncResult",
+        "CourierSyncResponse",
+    ]:
+        assert runtime["components"]["schemas"][name] == contract["components"]["schemas"][name]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("same_id", [False, True])
+async def test_sync_concurrent_devices_apply_only_one_pickup(same_id):
+    import asyncio
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context, snapshot = await offline_ready(client)
+        first = pickup_command(snapshot)
+        second = first if same_id else pickup_command(snapshot)
+        results = await asyncio.gather(
+            sync_commands(client, context, [first]), sync_commands(client, context, [second])
+        )
+        assert sorted(r[0]["outcome"] for r in results) == (
+            ["ALREADY_APPLIED", "APPLIED"] if same_id else ["APPLIED", "REJECTED"]
+        )
+        if not same_id:
+            assert (
+                next(r[0] for r in results if r[0]["outcome"] == "REJECTED")["error"]["code"]
+                == "OFFLINE_COMMAND_STALE"
+            )
+        async with get_session_factory()() as session:
+            assert (
+                await session.scalar(
+                    text(
+                        "SELECT count(*) FROM handoffs WHERE shipment_id=:id "
+                        "AND kind='PICKUP' AND status='CONFIRMED'"
+                    ),
+                    {"id": context["shipment_id"]},
+                )
+                == 1
+            )
+            assert (
+                await session.scalar(
+                    text(
+                        "SELECT count(*) FROM audit_events "
+                        "WHERE operation='courier_offline_command' AND resource_id=:id "
+                        "AND details->>'outcome'='APPLIED'"
+                    ),
+                    {"id": context["shipment_id"]},
+                )
+                == 1
+            )
+
+
+@pytest.mark.asyncio
+async def test_sync_link_allows_other_container_delivery_but_rejects_spoofed_versions():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context, snapshot = await offline_ready(client, container_count=2)
+        pickup = pickup_command(snapshot)
+        commands = [pickup] + [
+            delivery_command(snapshot, predecessor=pickup["client_command_id"], container_index=i)
+            for i in range(2)
+        ]
+        assert [r["outcome"] for r in await sync_commands(client, context, commands)] == [
+            "APPLIED"
+        ] * 3
+        forged = delivery_command(snapshot, predecessor=pickup["client_command_id"])
+        forged["expected_target_state_version"] += 1
+        assert (await sync_commands(client, context, [forged]))[0]["error"][
+            "code"
+        ] == "OFFLINE_COMMAND_STALE"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field", ["snapshot_id", "expected_manifest_version", "expected_target_state_version"]
+)
+async def test_sync_rejects_untrusted_snapshot_tokens_without_mutation(field):
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context, snapshot = await offline_ready(client)
+        command = pickup_command(snapshot)
+        command[field] = str(uuid4()) if field == "snapshot_id" else command[field] + 1
+        result = (await sync_commands(client, context, [command]))[0]
+        assert result["outcome"] == "REJECTED"
+        assert result["error"]["code"] == (
+            "INVALID_SNAPSHOT" if field == "snapshot_id" else "OFFLINE_COMMAND_STALE"
+        )
+        assert await offline_counts(command["client_command_id"]) == (1, 1, 1)
+        async with get_session_factory()() as session:
+            assert (
+                await session.scalar(
+                    text("SELECT status FROM shipments WHERE id=:id"),
+                    {"id": context["shipment_id"]},
+                )
+                == "PICKUP_PENDING"
+            )
+
+
+@pytest.mark.asyncio
+async def test_sync_definite_failure_after_mutation_rolls_back_before_recording(monkeypatch):
+    from fastapi import HTTPException
+
+    from app.modules.shipments import offline
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context, snapshot = await offline_ready(client)
+        real = offline.confirm_pickup_command
+
+        async def rejected_after_change(*args, **kwargs):
+            await real(*args, **kwargs)
+            raise HTTPException(409, "Injected definite rejection after mutation")
+
+        monkeypatch.setattr(offline, "confirm_pickup_command", rejected_after_change)
+        command = pickup_command(snapshot)
+        result = (await sync_commands(client, context, [command]))[0]
+        assert result["outcome"] == "REJECTED"
+        assert await offline_counts(command["client_command_id"]) == (1, 1, 1)
+        async with get_session_factory()() as session:
+            assert (
+                await session.scalar(
+                    text("SELECT status FROM shipments WHERE id=:id"),
+                    {"id": context["shipment_id"]},
+                )
+                == "PICKUP_PENDING"
+            )
+            assert (
+                await session.scalar(
+                    text("SELECT delivery_status FROM transport_containers WHERE id=:id"),
+                    {"id": snapshot["containers"][0]["id"]},
+                )
+                == "PREPARED"
+            )
+        monkeypatch.undo()
+        assert (await sync_commands(client, context, [command]))[0][
+            "original_outcome"
+        ] == "REJECTED"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "age_delta,expected",
+    [(timedelta(hours=24), "APPLIED"), (timedelta(hours=24, microseconds=1), "REVIEW_REQUIRED")],
+)
+async def test_sync_snapshot_age_uses_exact_server_boundary(monkeypatch, age_delta, expected):
+    from app.modules.shipments import offline
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context, snapshot = await offline_ready(client)
+        issued = datetime.fromisoformat(snapshot["issued_at"].replace("Z", "+00:00"))
+
+        async def boundary_clock(session):
+            return issued + age_delta
+
+        monkeypatch.setattr(offline, "server_now", boundary_clock)
+        result = (await sync_commands(client, context, [pickup_command(snapshot)]))[0]
+        assert result["outcome"] == expected
+
+
+@pytest.mark.asyncio
+async def test_sync_revocation_between_commands_denies_replay_in_same_batch(monkeypatch):
+    from app.modules.shipments import offline
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context, snapshot = await offline_ready(client)
+        command = pickup_command(snapshot)
+        real = offline.sync_offline_command
+        calls = 0
+
+        async def revoke_after_commit(*args, **kwargs):
+            nonlocal calls
+            result = await real(*args, **kwargs)
+            calls += 1
+            if calls == 1:
+                async with get_session_factory()() as session:
+                    await session.execute(
+                        text(
+                            "UPDATE memberships SET is_active=false "
+                            "WHERE user_id=:id AND role='COURIER'"
+                        ),
+                        {"id": context["courier_id"]},
+                    )
+                    await session.commit()
+            return result
+
+        monkeypatch.setattr(offline, "sync_offline_command", revoke_after_commit)
+        first, second = await sync_commands(client, context, [command, command])
+        assert first["outcome"] == "APPLIED"
+        assert second["outcome"] == "REJECTED"
+        assert second["error"]["code"] == "RESOURCE_NOT_FOUND"
+        assert second["recorded_at"] is None
+        assert await offline_counts(command["client_command_id"]) == (1, 1, 1)
+
+
+def test_offline_static_contract_has_no_dangling_local_references():
+    contract = json.loads(
+        (Path(__file__).resolve().parents[3] / "openapi/labtrack-v1.json").read_text()
+    )
+
+    def check_refs(value):
+        if isinstance(value, dict):
+            if "$ref" in value and value["$ref"].startswith("#/"):
+                target = contract
+                for segment in value["$ref"][2:].split("/"):
+                    assert segment in target, f"Dangling reference: {value['$ref']}"
+                    target = target[segment]
+            for child in value.values():
+                check_refs(child)
+        elif isinstance(value, list):
+            for child in value:
+                check_refs(child)
+
+    check_refs(contract)
+
+
+@pytest.mark.asyncio
+async def test_sync_other_actor_predecessor_is_terminal_without_exposing_foreign_outcome():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        foreign_context, foreign_snapshot = await offline_ready(client)
+        foreign_pickup = pickup_command(foreign_snapshot)
+        assert (await sync_commands(client, foreign_context, [foreign_pickup]))[0][
+            "outcome"
+        ] == "APPLIED"
+        context, snapshot = await offline_ready(client)
+        delivery = delivery_command(snapshot, predecessor=foreign_pickup["client_command_id"])
+        result = (await sync_commands(client, context, [delivery]))[0]
+        assert result["outcome"] == "REJECTED"
+        assert result["error"]["code"] == "INVALID_DEPENDENCY"
+        assert result["server_status"] == "PICKUP_PENDING"
+        assert await offline_counts(delivery["client_command_id"]) == (1, 1, 1)
+
+
+@pytest.mark.asyncio
+async def test_sync_delivery_cannot_depend_on_itself():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context, snapshot = await offline_ready(client)
+        command = delivery_command(snapshot)
+        command["depends_on_command_id"] = command["client_command_id"]
+        result = (await sync_commands(client, context, [command]))[0]
+        assert result["outcome"] == "REJECTED"
+        assert result["error"]["code"] == "INVALID_DEPENDENCY"
+        assert await offline_counts(command["client_command_id"]) == (1, 1, 1)
+
+
+@pytest.mark.asyncio
+async def test_sync_compaction_during_replay_never_releases_command_identity(monkeypatch):
+    import asyncio
+
+    from app.modules.idempotency.service import compact_offline_replays
+    from app.modules.shipments import offline
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context, snapshot = await offline_ready(client)
+        command = pickup_command(snapshot)
+        original = (await sync_commands(client, context, [command]))[0]
+        looked_up = asyncio.Event()
+        resume_replay = asyncio.Event()
+        real_lock = offline.lock_offline_command
+
+        async def pause_after_identity_lookup(*args, **kwargs):
+            tombstone = await real_lock(*args, **kwargs)
+            looked_up.set()
+            await asyncio.wait_for(resume_replay.wait(), timeout=10)
+            return tombstone
+
+        monkeypatch.setattr(offline, "lock_offline_command", pause_after_identity_lookup)
+        replay_task = asyncio.create_task(sync_commands(client, context, [command]))
+        try:
+            await asyncio.wait_for(looked_up.wait(), timeout=10)
+            async with get_session_factory()() as session:
+                assert (
+                    await compact_offline_replays(
+                        session, as_of=datetime.now(UTC) + timedelta(days=91)
+                    )
+                    == 1
+                )
+                await session.commit()
+        finally:
+            resume_replay.set()
+        replay = (await replay_task)[0]
+        assert replay["outcome"] == "ALREADY_APPLIED"
+        assert replay["original_outcome"] == "APPLIED"
+        assert replay["recorded_at"] == original["recorded_at"]
+        assert await offline_counts(command["client_command_id"]) == (0, 1, 1)
+        monkeypatch.undo()
+        # The upper batch boundary is valid and every duplicate stays a replay.
+        results = await sync_commands(client, context, [command] * 20)
+        assert len(results) == 20
+        assert {result["outcome"] for result in results} == {"ALREADY_APPLIED"}
+        changed = {**command, "client_performed_at": "2002-01-01T00:00:00Z"}
+        assert (await sync_commands(client, context, [changed]))[0]["error"][
+            "code"
+        ] == "IDEMPOTENCY_KEY_REUSED"
+        assert await offline_counts(command["client_command_id"]) == (0, 1, 1)

@@ -566,3 +566,68 @@ class ReceivingHistory(BaseModel):
     total_revisions: int = Field(ge=0)
     limit: int = Field(ge=1, le=100)
     offset: int = Field(ge=0)
+
+
+class CourierOfflineCommandBase(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    client_command_id: UUID
+    shipment_id: UUID
+    snapshot_id: UUID
+    expected_manifest_version: int = Field(ge=0)
+    expected_target_state_version: int = Field(ge=1)
+    client_performed_at: AwareDatetime
+
+
+class CourierOfflinePickupCommand(CourierOfflineCommandBase, ContainerCodesRequest):
+    action: Literal["COURIER_CONFIRM_PICKUP"]
+    container_codes: list[str] = Field(
+        min_length=1, max_length=50, json_schema_extra={"uniqueItems": True}
+    )
+
+
+class CourierOfflineContainerDeliveryCommand(CourierOfflineCommandBase, ContainerCodeRequest):
+    action: Literal["COURIER_INITIATE_CONTAINER_DELIVERY"]
+    container_id: UUID
+    depends_on_command_id: UUID | None = None
+
+
+CourierOfflineCommand = Annotated[
+    CourierOfflinePickupCommand | CourierOfflineContainerDeliveryCommand,
+    Field(discriminator="action"),
+]
+
+
+class CourierSyncRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    commands: list[CourierOfflineCommand] = Field(min_length=1, max_length=20)
+
+
+class CourierSyncError(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+    message: str
+
+
+class CourierSyncResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    client_command_id: UUID
+    shipment_id: UUID
+    outcome: Literal["APPLIED", "ALREADY_APPLIED", "REJECTED", "RETRYABLE", "REVIEW_REQUIRED"]
+    original_outcome: Literal["APPLIED", "REJECTED", "REVIEW_REQUIRED"] | None
+    server_status: ShipmentStatus | None
+    recorded_at: AwareDatetime | None = Field(
+        description="Authoritative server timestamp for persisted outcomes; null if not recorded"
+    )
+    error: CourierSyncError | None
+    container_id: UUID | None
+    client_performed_at: AwareDatetime
+
+
+class CourierSyncResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    results: list[CourierSyncResult]

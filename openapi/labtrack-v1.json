@@ -4799,18 +4799,18 @@
         "tags": [
           "CourierOffline"
         ],
-        "operationId": "syncCourierOfflineCommands",
         "summary": "Per-command replay: full response 90 days then tombstone; >24h snapshot REVIEW_REQUIRED, new live action after manual review",
-        "parameters": [],
+        "description": "Strict dependency-based stale check: whole Pickup custody phase for Pickup, target Container/Handoff for Delivery; sealed manifest and live Courier auth always checked before replay. Unrelated Shipment.version increments do not cause rejection. Snapshots older than 24h yield stored REVIEW_REQUIRED without custody mutation. Delivery may name an applied same-actor/Shipment/snapshot Pickup using depends_on_command_id, only while current Pickup and target versions exactly equal that predecessor's recorded post-state. No general automatic rebase is allowed.",
+        "operationId": "syncCourierOfflineCommands",
         "requestBody": {
-          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/CourierSyncRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -4832,67 +4832,71 @@
             }
           },
           "401": {
-            "description": "Error response",
+            "description": "Documented API error",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/APIErrorResponse"
                 }
               }
             }
           },
           "403": {
-            "description": "Error response",
+            "description": "Documented API error",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/APIErrorResponse"
                 }
               }
             }
           },
           "404": {
-            "description": "Error response",
+            "description": "Documented API error",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/APIErrorResponse"
                 }
               }
             }
           },
           "409": {
-            "description": "Error response",
+            "description": "Documented API error",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/APIErrorResponse"
                 }
               }
             }
           },
           "422": {
-            "description": "Error response",
+            "description": "Documented API error",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/APIErrorResponse"
                 }
               }
             }
           },
           "503": {
-            "description": "Error response",
+            "description": "Documented API error",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/APIErrorResponse"
                 }
               }
             }
           }
         },
-        "description": "Strict dependency-based stale check: whole Pickup custody phase for pickup, target Container/Handoff for delivery; sealed manifest and live Courier auth always checked. Unrelated Shipment.version increments are not sufficient to reject. 24h issued snapshot -> REVIEW_REQUIRED, no retroactive stale payload acceptance."
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/operations/stalled-shipments": {
@@ -9088,47 +9092,78 @@
             "$ref": "#/components/schemas/CourierOfflineContainerDeliveryCommand"
           }
         ],
-        "description": "OPEN-04 approved: relevant dependencies are manifest revision, target Container/Handoff state version (Pickup phase version for Pickup), confirmed Pickup validity, assigned Courier and active authorization. No automatic rebase after relevant change. Unrelated other-container data edits alone do not make command stale."
+        "description": "OPEN-04 approved: relevant dependencies are manifest revision, target Container/Handoff state version (Pickup phase version for Pickup), confirmed Pickup validity, assigned Courier and active authorization. No automatic rebase after relevant change. Unrelated other-container data edits alone do not make command stale.",
+        "discriminator": {
+          "propertyName": "action",
+          "mapping": {
+            "COURIER_CONFIRM_PICKUP": "#/components/schemas/CourierOfflinePickupCommand",
+            "COURIER_INITIATE_CONTAINER_DELIVERY": "#/components/schemas/CourierOfflineContainerDeliveryCommand"
+          }
+        }
       },
       "CourierSyncRequest": {
-        "type": "object",
         "properties": {
           "commands": {
-            "type": "array",
             "items": {
-              "$ref": "#/components/schemas/CourierOfflineCommand"
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/CourierOfflinePickupCommand"
+                },
+                {
+                  "$ref": "#/components/schemas/CourierOfflineContainerDeliveryCommand"
+                }
+              ],
+              "discriminator": {
+                "propertyName": "action",
+                "mapping": {
+                  "COURIER_CONFIRM_PICKUP": "#/components/schemas/CourierOfflinePickupCommand",
+                  "COURIER_INITIATE_CONTAINER_DELIVERY": "#/components/schemas/CourierOfflineContainerDeliveryCommand"
+                }
+              }
             },
+            "type": "array",
+            "maxItems": 20,
             "minItems": 1,
-            "maxItems": 20
+            "title": "Commands"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "commands"
         ],
-        "additionalProperties": false
+        "title": "CourierSyncRequest"
       },
       "CourierSyncError": {
-        "type": "object",
         "properties": {
           "code": {
-            "type": "string"
+            "type": "string",
+            "title": "Code"
           },
           "message": {
-            "type": "string"
+            "type": "string",
+            "title": "Message"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "code",
           "message"
         ],
-        "additionalProperties": false
+        "title": "CourierSyncError"
       },
       "CourierSyncResult": {
-        "type": "object",
         "properties": {
           "client_command_id": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "title": "Client Command Id"
+          },
+          "shipment_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Shipment Id"
           },
           "outcome": {
             "type": "string",
@@ -9139,43 +9174,64 @@
               "RETRYABLE",
               "REVIEW_REQUIRED"
             ],
-            "description": "REVIEW_REQUIRED means server did not apply old/uncertain action; original stale payload is never retrospectively approved"
+            "title": "Outcome"
           },
-          "shipment_id": {
-            "type": "string",
-            "format": "uuid"
+          "original_outcome": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "APPLIED",
+                  "REJECTED",
+                  "REVIEW_REQUIRED"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Outcome"
           },
           "server_status": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "DRAFT",
+                  "READY_FOR_PICKUP",
+                  "PICKUP_PENDING",
+                  "IN_TRANSIT",
+                  "DELIVERY_PENDING",
+                  "DELIVERY_BLOCKED",
+                  "PARTIALLY_DELIVERED",
+                  "RECEIVING",
+                  "COMPLETED",
+                  "COMPLETED_WITH_ISSUES",
+                  "CANCELLED",
+                  "CLOSED_UNDELIVERED"
+                ]
+              },
+              {
+                "type": "null"
+              }
             ],
-            "enum": [
-              "DRAFT",
-              "READY_FOR_PICKUP",
-              "PICKUP_PENDING",
-              "IN_TRANSIT",
-              "DELIVERY_PENDING",
-              "DELIVERY_BLOCKED",
-              "PARTIALLY_DELIVERED",
-              "RECEIVING",
-              "COMPLETED",
-              "COMPLETED_WITH_ISSUES",
-              "CANCELLED",
-              "CLOSED_UNDELIVERED",
-              null
-            ]
+            "title": "Server Status"
           },
           "recorded_at": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "format": "date-time",
-            "description": "Authoritative server timestamp for applied actions; null if not applied"
+            "title": "Recorded At",
+            "description": "Authoritative server timestamp for persisted outcomes; null if not recorded"
           },
           "error": {
-            "oneOf": [
+            "anyOf": [
               {
                 "$ref": "#/components/schemas/CourierSyncError"
               },
@@ -9185,43 +9241,54 @@
             ]
           },
           "container_id": {
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "format": "uuid"
+            "title": "Container Id"
           },
           "client_performed_at": {
             "type": "string",
-            "format": "date-time"
+            "format": "date-time",
+            "title": "Client Performed At"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "client_command_id",
-          "outcome",
           "shipment_id",
+          "outcome",
+          "original_outcome",
           "server_status",
           "recorded_at",
           "error",
           "container_id",
           "client_performed_at"
         ],
-        "additionalProperties": false
+        "title": "CourierSyncResult"
       },
       "CourierSyncResponse": {
-        "type": "object",
         "properties": {
           "results": {
-            "type": "array",
             "items": {
               "$ref": "#/components/schemas/CourierSyncResult"
-            }
+            },
+            "type": "array",
+            "title": "Results"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
           "results"
         ],
-        "additionalProperties": false
+        "title": "CourierSyncResponse"
       },
       "StalledShipment": {
         "type": "object",
@@ -9541,110 +9608,141 @@
         "additionalProperties": false
       },
       "CourierOfflinePickupCommand": {
-        "type": "object",
         "properties": {
+          "container_codes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "minItems": 1,
+            "uniqueItems": true,
+            "title": "Container Codes"
+          },
           "client_command_id": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "title": "Client Command Id"
           },
           "shipment_id": {
             "type": "string",
-            "format": "uuid"
-          },
-          "action": {
-            "const": "COURIER_CONFIRM_PICKUP"
-          },
-          "container_codes": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 50,
-            "uniqueItems": true,
-            "items": {
-              "type": "string"
-            }
-          },
-          "expected_manifest_version": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "client_performed_at": {
-            "type": "string",
-            "format": "date-time"
+            "format": "uuid",
+            "title": "Shipment Id"
           },
           "snapshot_id": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "title": "Snapshot Id"
+          },
+          "expected_manifest_version": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expected Manifest Version"
           },
           "expected_target_state_version": {
             "type": "integer",
-            "minimum": 1,
-            "description": "Version of whole-Shipment Pickup Handoff/custody phase. Reject when changed even if status reverted; independent other-container item edits are irrelevant."
+            "minimum": 1.0,
+            "title": "Expected Target State Version"
+          },
+          "client_performed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Client Performed At"
+          },
+          "action": {
+            "type": "string",
+            "const": "COURIER_CONFIRM_PICKUP",
+            "title": "Action"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
+          "container_codes",
           "client_command_id",
           "shipment_id",
-          "action",
-          "container_codes",
-          "expected_manifest_version",
-          "client_performed_at",
           "snapshot_id",
-          "expected_target_state_version"
+          "expected_manifest_version",
+          "expected_target_state_version",
+          "client_performed_at",
+          "action"
         ],
-        "additionalProperties": false
+        "title": "CourierOfflinePickupCommand"
       },
       "CourierOfflineContainerDeliveryCommand": {
-        "type": "object",
         "properties": {
+          "container_code": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Container Code"
+          },
           "client_command_id": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "title": "Client Command Id"
           },
           "shipment_id": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "title": "Shipment Id"
+          },
+          "snapshot_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Snapshot Id"
+          },
+          "expected_manifest_version": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Expected Manifest Version"
+          },
+          "expected_target_state_version": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Expected Target State Version"
+          },
+          "client_performed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Client Performed At"
+          },
+          "action": {
+            "type": "string",
+            "const": "COURIER_INITIATE_CONTAINER_DELIVERY",
+            "title": "Action"
           },
           "container_id": {
             "type": "string",
-            "format": "uuid"
+            "format": "uuid",
+            "title": "Container Id"
           },
-          "container_code": {
-            "type": "string",
-            "minLength": 1
-          },
-          "action": {
-            "const": "COURIER_INITIATE_CONTAINER_DELIVERY"
-          },
-          "expected_manifest_version": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "client_performed_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "snapshot_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "expected_target_state_version": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "Version of target container custody state/Handoff attempt, checked under Shipment parent lock; unrelated Shipment bookkeeping is not automatically a conflict."
+          "depends_on_command_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Depends On Command Id"
           }
         },
+        "additionalProperties": false,
+        "type": "object",
         "required": [
+          "container_code",
           "client_command_id",
           "shipment_id",
-          "container_id",
-          "container_code",
-          "action",
-          "expected_manifest_version",
-          "client_performed_at",
           "snapshot_id",
-          "expected_target_state_version"
+          "expected_manifest_version",
+          "expected_target_state_version",
+          "client_performed_at",
+          "action",
+          "container_id"
         ],
-        "additionalProperties": false
+        "title": "CourierOfflineContainerDeliveryCommand"
       },
       "AnalyticsPeriodBucket": {
         "type": "object",
@@ -10242,6 +10340,49 @@
           "physically_present"
         ],
         "additionalProperties": false
+      },
+      "APIErrorResponse": {
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/APIError"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "title": "APIErrorResponse"
+      },
+      "APIError": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "details": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Details"
+          },
+          "request_id": {
+            "type": "string",
+            "title": "Request Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "details",
+          "request_id"
+        ],
+        "title": "APIError"
       }
     }
   }
