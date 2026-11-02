@@ -1,8 +1,14 @@
 import type {
   AccessTokenResponse,
+  AnalyticsGranularity,
   CurrentUser,
+  Notification,
   OfflineCommand,
   OfflineManifest,
+  NotificationUnreadCount,
+  PagedNotification,
+  PagedStalledShipment,
+  ShipmentSummary,
   SyncResult,
 } from './types';
 
@@ -20,24 +26,40 @@ export class ApiError extends Error {
 
 async function request<T>(
   path: string,
-  options: { token?: string; method?: 'GET' | 'POST'; body?: unknown } = {},
+  options: {
+    token?: string;
+    method?: 'GET' | 'POST';
+    body?: unknown;
+    signal?: AbortSignal;
+    idempotencyKey?: string;
+  } = {},
 ): Promise<T> {
   const headers = new Headers({ Accept: 'application/json', 'Cache-Control': 'no-store' });
   if (options.body !== undefined) headers.set('Content-Type', 'application/json');
   if (options.token) headers.set('Authorization', `Bearer ${options.token}`);
+  if (options.idempotencyKey) headers.set('Idempotency-Key', options.idempotencyKey);
 
   const response = await fetch(`${apiBase}${path}`, {
     method: options.method ?? 'GET',
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
     cache: 'no-store',
+    signal: options.signal,
   });
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as
-      | { detail?: string; message?: string }
+      | {
+          detail?: string;
+          message?: string;
+          error?: { detail?: string; message?: string };
+        }
       | null;
     throw new ApiError(
-      payload?.detail ?? payload?.message ?? `Request failed with ${response.status}.`,
+      payload?.detail ??
+        payload?.message ??
+        payload?.error?.detail ??
+        payload?.error?.message ??
+        `Request failed with ${response.status}.`,
       response.status,
     );
   }
@@ -64,5 +86,91 @@ export function syncCommands(
     token,
     method: 'POST',
     body: { commands },
+  });
+}
+
+export function getStalledShipments(
+  token: string,
+  options: {
+    limit: number;
+    offset: number;
+    regionId?: string;
+    signal?: AbortSignal;
+  },
+): Promise<PagedStalledShipment> {
+  const query = new URLSearchParams({
+    limit: String(options.limit),
+    offset: String(options.offset),
+  });
+  if (options.regionId) query.set('region_id', options.regionId);
+
+  return request(`/operations/stalled-shipments?${query.toString()}`, {
+    token,
+    signal: options.signal,
+  });
+}
+
+export function getShipmentSummary(
+  token: string,
+  options: {
+    granularity: AnalyticsGranularity;
+    from?: string;
+    to?: string;
+    regionId: string;
+    signal?: AbortSignal;
+  },
+): Promise<ShipmentSummary> {
+  const query = new URLSearchParams({
+    granularity: options.granularity,
+    region_id: options.regionId,
+  });
+  if (options.from) query.set('from', options.from);
+  if (options.to) query.set('to', options.to);
+
+  return request(`/analytics/shipments/summary?${query.toString()}`, {
+    token,
+    signal: options.signal,
+  });
+}
+
+export function listInboxNotifications(
+  token: string,
+  options: {
+    limit: number;
+    offset: number;
+    unreadOnly?: boolean;
+    signal?: AbortSignal;
+  },
+): Promise<PagedNotification> {
+  const query = new URLSearchParams({
+    limit: String(options.limit),
+    offset: String(options.offset),
+  });
+  if (options.unreadOnly !== undefined) {
+    query.set('unread_only', String(options.unreadOnly));
+  }
+
+  return request(`/notifications?${query.toString()}`, {
+    token,
+    signal: options.signal,
+  });
+}
+
+export function getInboxUnreadCount(
+  token: string,
+  signal?: AbortSignal,
+): Promise<NotificationUnreadCount> {
+  return request('/notifications/unread-count', { token, signal });
+}
+
+export function markInboxNotificationRead(
+  token: string,
+  notificationId: string,
+  idempotencyKey: string,
+): Promise<Notification> {
+  return request(`/notifications/${encodeURIComponent(notificationId)}/read`, {
+    token,
+    method: 'POST',
+    idempotencyKey,
   });
 }

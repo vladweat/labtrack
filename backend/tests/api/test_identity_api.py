@@ -195,5 +195,10 @@ async def test_request_id_is_returned_and_invalid_request_id_is_replaced() -> No
         accepted = await client.get("/health/live", headers={"X-Request-ID": "trace-1234"})
         replaced = await client.get("/health/live", headers={"X-Request-ID": "bad token"})
 
-    assert accepted.headers["X-Request-ID"] == "trace-1234"
-    assert len(replaced.headers["X-Request-ID"]) == 36
+    accepted_request_id = accepted.headers["X-Request-ID"]
+    replaced_request_id = replaced.headers["X-Request-ID"]
+    UUID(accepted_request_id)
+    UUID(replaced_request_id)
+    assert accepted_request_id != "trace-1234"
+    assert replaced_request_id != "bad token"
+    assert accepted_request_id != replaced_request_id

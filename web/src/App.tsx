@@ -1,6 +1,15 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { ApiError, currentUser, login, offlineManifest, syncCommands } from './api';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import {
+  ApiError,
+  currentUser,
+  getInboxUnreadCount,
+  login,
+  offlineManifest,
+  syncCommands,
+} from './api';
 import { CommandQueue } from './CommandQueue';
+import { NotificationInbox } from './NotificationInbox';
+import { OperationsDashboard } from './OperationsDashboard';
 import {
   addCommand,
   getActiveUserId,
@@ -21,6 +30,13 @@ import type {
   PickupCommand,
   QueueItem,
 } from './types';
+import { deriveOperationsCapabilities } from './types';
+
+type Workspace = 'courier' | 'operations' | 'inbox';
+
+type InboxCountResult =
+  | { requestKey: string; count: number }
+  | { requestKey: string; error: string };
 
 type PurgeDialog =
   | { kind: 'switch-login' }
@@ -40,6 +56,14 @@ function createCommandId(): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'The request could not be completed.';
+}
+
+function inboxCountFailure(error: unknown, isOnline: boolean): string {
+  if (!isOnline) return 'Нет подключения к сети. Счётчик непрочитанных не обновлён.';
+  if (error instanceof TypeError) {
+    return 'Не удалось подключиться к серверу для обновления счётчика.';
+  }
+  return `Не удалось обновить счётчик непрочитанных уведомлений. ${errorMessage(error)}`;
 }
 
 function sortedCodes(value: string): string[] {
@@ -265,7 +289,9 @@ function SwitchAccountPrompt({
 
 function App() {
   const tokenRef = useRef<string | null>(null);
+  const [accessToken, setAccessToken] = useState<string | null>(null);
   const [user, setUser] = useState<CurrentUser | null>(null);
+  const [workspace, setWorkspace] = useState<Workspace>('courier');
   const [snapshot, setSnapshot] = useState<OfflineManifest | null>(null);
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [shipmentId, setShipmentId] = useState('');
@@ -279,6 +305,8 @@ function App() {
   const [pageError, setPageError] = useState('');
   const [message, setMessage] = useState('');
   const [dialog, setDialog] = useState<PurgeDialog | null>(null);
+  const [inboxCountRefresh, setInboxCountRefresh] = useState(0);
+  const [inboxCountResult, setInboxCountResult] = useState<InboxCountResult | null>(null);
 
   useEffect(() => {
     const updateOnline = () => setIsOnline(navigator.onLine);
@@ -304,7 +332,18 @@ function App() {
 
   async function enterSession(authenticatedUser: CurrentUser, token: string) {
     tokenRef.current = token;
+    setAccessToken(token);
     setUser(authenticatedUser);
+    setInboxCountResult(null);
+    setInboxCountRefresh((value) => value + 1);
+    const capabilities = deriveOperationsCapabilities(authenticatedUser);
+    setWorkspace(
+      capabilities.canUseCourier
+        ? 'courier'
+        : capabilities.canViewCases || capabilities.canViewAnalytics
+          ? 'operations'
+          : 'inbox',
+    );
     setLoginError('');
     setPageError('');
     setMessage('');
@@ -348,7 +387,9 @@ function App() {
 
   async function clearSession() {
     tokenRef.current = null;
+    setAccessToken(null);
     setUser(null);
+    setInboxCountResult(null);
     setSnapshot(null);
     setQueue([]);
     setShipmentId('');
@@ -357,6 +398,77 @@ function App() {
     setLinkDelivery(false);
     setPageError('');
     setMessage('');
+  }
+
+  const handleDashboardUnauthorized = useCallback(() => {
+    tokenRef.current = null;
+    setAccessToken(null);
+    setUser(null);
+    setInboxCountResult(null);
+    setPageError('Срок действия сеанса истёк. Войдите снова; локальная очередь на устройстве сохранена.');
+    setMessage('');
+  }, []);
+
+  const inboxCountRequestKey = user && accessToken
+    ? JSON.stringify([user.id, accessToken, inboxCountRefresh, isOnline])
+    : '';
+  const matchingInboxCount = inboxCountResult?.requestKey === inboxCountRequestKey
+    ? inboxCountResult
+    : null;
+  const unreadCount = matchingInboxCount && 'count' in matchingInboxCount
+    ? matchingInboxCount.count
+    : null;
+  const inboxCountLoading = Boolean(user && accessToken && isOnline && !matchingInboxCount);
+  const activeUserId = user?.id;
+  const inboxCountError = !user
+    ? ''
+    : !isOnline
+      ? inboxCountFailure(null, false)
+      : matchingInboxCount && 'error' in matchingInboxCount
+        ? matchingInboxCount.error
+        : '';
+
+  useEffect(() => {
+    if (!activeUserId || !accessToken || !isOnline) return;
+    const controller = new AbortController();
+    void getInboxUnreadCount(accessToken, controller.signal)
+      .then((response) => {
+        if (!controller.signal.aborted) {
+          setInboxCountResult({ requestKey: inboxCountRequestKey, count: response.count });
+        }
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        if (error instanceof ApiError && error.status === 401) {
+          setInboxCountResult({
+            requestKey: inboxCountRequestKey,
+            error: 'Срок действия сеанса истёк. Войдите снова.',
+          });
+          handleDashboardUnauthorized();
+        } else {
+          setInboxCountResult({
+            requestKey: inboxCountRequestKey,
+            error: inboxCountFailure(error, isOnline),
+          });
+        }
+      });
+
+    return () => controller.abort();
+  }, [
+    accessToken,
+    handleDashboardUnauthorized,
+    inboxCountRequestKey,
+    isOnline,
+    activeUserId,
+  ]);
+
+  function openInbox() {
+    setWorkspace('inbox');
+    setInboxCountRefresh((value) => value + 1);
+  }
+
+  function refreshInboxCount() {
+    setInboxCountRefresh((value) => value + 1);
   }
 
   function cancelPurge() {
@@ -445,6 +557,7 @@ function App() {
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         tokenRef.current = null;
+        setAccessToken(null);
         setUser(null);
         setPageError('Your sign-in expired. Sign in again to continue; this account’s local queue is retained.');
       } else {
@@ -558,6 +671,7 @@ function App() {
         } catch (error) {
           if (error instanceof ApiError && error.status === 401) {
             tokenRef.current = null;
+            setAccessToken(null);
             setUser(null);
             setPageError('Your sign-in expired. Sign in again; pending commands remain saved for this account.');
           } else {
@@ -613,13 +727,50 @@ function App() {
     ? ['IN_TRANSIT', 'DELIVERY_PENDING', 'PARTIALLY_DELIVERED'].includes(snapshot.status)
     : false;
   const canQueueDelivery = Boolean(snapshot && (pendingPickup || pickupIsConfirmed));
+  const capabilities = user ? deriveOperationsCapabilities(user) : null;
+  const hasOperationsWorkspace = Boolean(
+    capabilities?.canViewCases || capabilities?.canViewAnalytics,
+  );
+  const hasMultipleWorkspaces = Boolean(capabilities?.canUseCourier && hasOperationsWorkspace);
+  const inboxReturnWorkspace: Workspace | null = capabilities?.canUseCourier
+    ? 'courier'
+    : hasOperationsWorkspace
+      ? 'operations'
+      : null;
+  const inboxReturnLabel = inboxReturnWorkspace === 'courier'
+    ? 'Курьер'
+    : inboxReturnWorkspace === 'operations'
+      ? 'Операции'
+      : '';
+
+  function returnToAvailableWorkspace() {
+    if (inboxReturnWorkspace) setWorkspace(inboxReturnWorkspace);
+  }
 
   return (
     <div className="app-shell">
       <header className="topbar">
-        <a className="brand" href="/" aria-label="LabTrack Courier home">
+        <a
+          className="brand"
+          href="/"
+          aria-label={
+            user && workspace === 'operations'
+              ? 'LabTrack, операционная панель'
+              : user && workspace === 'inbox'
+                ? 'LabTrack, входящие уведомления'
+                : 'LabTrack Courier home'
+          }
+        >
           <span className="brand-mark" aria-hidden="true">L</span>
-          <span>LabTrack <strong>Courier</strong></span>
+          <span>
+            LabTrack <strong>
+              {user && workspace === 'operations'
+                ? 'Операции'
+                : user && workspace === 'inbox'
+                  ? 'Входящие'
+                  : 'Courier'}
+            </strong>
+          </span>
         </a>
         <div className="topbar-tools">
           <span className={`connection-pill ${isOnline ? 'is-online' : 'is-offline'}`}>
@@ -629,6 +780,24 @@ function App() {
           {user && (
             <div className="account-tools">
               <span className="user-name">{user.display_name}</span>
+              <button
+                aria-label={
+                  inboxCountLoading
+                    ? 'Входящие, загружается число непрочитанных'
+                    : inboxCountError
+                      ? 'Входящие, счётчик непрочитанных недоступен'
+                      : `Входящие, непрочитанных: ${unreadCount ?? 0}`
+                }
+                aria-pressed={workspace === 'inbox'}
+                className={`text-button inbox-nav-trigger ${workspace === 'inbox' ? 'is-current' : ''}`}
+                onClick={openInbox}
+                type="button"
+              >
+                <span>Входящие</span>
+                <span aria-hidden="true" className="inbox-count-badge">
+                  {inboxCountLoading ? '…' : inboxCountError ? '!' : unreadCount ?? 0}
+                </span>
+              </button>
               <button className="text-button" onClick={showSwitchConfirmation} type="button">
                 Switch account
               </button>
@@ -641,27 +810,91 @@ function App() {
       </header>
 
       <main className="page-content">
-        <section className="page-intro" aria-labelledby="page-title">
-          <div>
-            <p className="eyebrow">Field operations · device-local queue</p>
-            <h1 id="page-title">Courier Offline</h1>
-            <p className="intro-copy">
-              Confirm Pickup and start a single-container Delivery with a saved Shipment snapshot. Local pending actions are not server custody events.
-            </p>
-          </div>
-          <div className="intro-stamp" aria-hidden="true">
-            <span>LT</span>
-            <small>Courier</small>
-          </div>
-        </section>
+        {hasMultipleWorkspaces && (
+          <nav className="workspace-nav" aria-label="Рабочие области">
+            <button
+              aria-pressed={workspace === 'courier'}
+              className={`workspace-nav-button ${workspace === 'courier' ? 'is-current' : ''}`}
+              onClick={() => setWorkspace('courier')}
+              type="button"
+            >
+              Курьер
+            </button>
+            <button
+              aria-pressed={workspace === 'operations'}
+              className={`workspace-nav-button ${workspace === 'operations' ? 'is-current' : ''}`}
+              onClick={() => setWorkspace('operations')}
+              type="button"
+            >
+              Операции
+            </button>
+          </nav>
+        )}
 
-        {pageError && <p className="page-alert" role="alert">{pageError}</p>}
-        {message && <p className="page-message" role="status" aria-live="polite">{message}</p>}
+        {user && inboxCountLoading && (
+          <p className="inbox-count-message" role="status" aria-live="polite">
+            Загружаем число непрочитанных уведомлений…
+          </p>
+        )}
+        {user && inboxCountError && (
+          <p className="inbox-count-message" role="alert">
+            {inboxCountError}{' '}
+            <button className="text-button" onClick={refreshInboxCount} type="button">
+              Повторить
+            </button>
+          </p>
+        )}
+
+        {(!user || workspace === 'courier') && (
+          <section className="page-intro" aria-labelledby="page-title">
+            <div>
+              <p className="eyebrow">Field operations · device-local queue</p>
+              <h1 id="page-title">Courier Offline</h1>
+              <p className="intro-copy">
+                Confirm Pickup and start a single-container Delivery with a saved Shipment snapshot. Local pending actions are not server custody events.
+              </p>
+            </div>
+            <div className="intro-stamp" aria-hidden="true">
+              <span>LT</span>
+              <small>Courier</small>
+            </div>
+          </section>
+        )}
+
+        {pageError && (!user || workspace === 'courier') && (
+          <p className="page-alert" role="alert">{pageError}</p>
+        )}
+        {message && user && workspace === 'courier' && (
+          <p className="page-message" role="status" aria-live="polite">{message}</p>
+        )}
 
         {!user ? (
           <LoginForm busy={busy} error={loginError} onSubmit={handleLogin} />
         ) : (
           <>
+            {workspace === 'operations' && hasOperationsWorkspace && accessToken && (
+              <OperationsDashboard
+                key={user.id}
+                onUnauthorized={handleDashboardUnauthorized}
+                token={accessToken}
+                user={user}
+              />
+            )}
+
+            {workspace === 'inbox' && accessToken && (
+              <NotificationInbox
+                key={user.id}
+                onUnauthorized={handleDashboardUnauthorized}
+                onUnreadCountChange={refreshInboxCount}
+                onReturnToWorkspace={inboxReturnWorkspace ? returnToAvailableWorkspace : undefined}
+                returnWorkspaceLabel={inboxReturnLabel}
+                token={accessToken}
+                unreadCount={unreadCount}
+              />
+            )}
+
+            {workspace === 'courier' && capabilities?.canUseCourier && (
+              <>
             <section className="panel session-panel" aria-labelledby="session-heading">
               <div className="section-heading">
                 <div>
@@ -850,12 +1083,29 @@ function App() {
                 <CommandQueue items={queue} />
               </div>
             )}
+              </>
+            )}
+
+            {!capabilities?.canUseCourier && !hasOperationsWorkspace && workspace !== 'inbox' && (
+              <section className="panel empty-state access-empty-state">
+                <h2>Нет доступных рабочих областей</h2>
+                <p className="muted">
+                  Для этой учётной записи не назначена роль курьера или доступ к операционной панели.
+                </p>
+              </section>
+            )}
           </>
         )}
       </main>
 
       <footer className="site-footer">
-        <span>LabTrack Courier</span>
+        <span>
+          LabTrack {user && workspace === 'operations'
+            ? 'Операции'
+            : user && workspace === 'inbox'
+              ? 'Входящие'
+              : 'Courier'}
+        </span>
         <span>Server custody remains authoritative</span>
       </footer>
 

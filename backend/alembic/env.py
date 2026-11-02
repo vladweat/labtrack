@@ -12,6 +12,7 @@ from app.db.base import Base
 from app.modules.audit import models as audit_models  # noqa: F401
 from app.modules.idempotency import models as idempotency_models  # noqa: F401
 from app.modules.identity import models as identity_models  # noqa: F401
+from app.modules.notifications import models as notification_models  # noqa: F401
 from app.modules.organizations import models as organization_models  # noqa: F401
 from app.modules.samples import models as sample_models  # noqa: F401
 from app.modules.shipments import models as shipment_models  # noqa: F401

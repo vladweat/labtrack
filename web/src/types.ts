@@ -17,6 +17,137 @@ export type CurrentUser = {
   memberships: CourierMembership[];
 };
 
+export type ShipmentCaseType =
+  | 'PICKUP_PENDING'
+  | 'DELIVERY_PENDING'
+  | 'PROPOSAL_PENDING'
+  | 'SHIPMENT_OVERDUE';
+
+export type StalledShipment = {
+  shipment_id: string;
+  status: string;
+  region_id: string;
+  last_event_at: string;
+  age_seconds: number;
+  case_type: ShipmentCaseType;
+  container_id: string | null;
+  proposal_id: string | null;
+};
+
+export type PagedStalledShipment = {
+  items: StalledShipment[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type AnalyticsGranularity = 'day' | 'week';
+
+export type AnalyticsPeriodBucket = {
+  period_start: string;
+  period_end: string;
+  total_shipments: number;
+  completed_shipments: number;
+  partially_delivered_shipments: number;
+  sample_issues: number;
+  container_issues: number;
+};
+
+export type AnalyticsFacility = {
+  organization_id: string;
+  shipment_count: number;
+  completed_count: number;
+  with_issues_count: number;
+};
+
+export type ShipmentSummary = {
+  region_id: string;
+  from: string | null;
+  to: string | null;
+  total: number;
+  by_status: Record<string, number>;
+  completed_with_issues: number;
+  missing_samples: number;
+  rejected_samples: number;
+  overdue_active: number;
+  closed_undelivered: number;
+  container_missing: number;
+  container_rejected: number;
+  partially_delivered: number;
+  partially_completed_with_issues: number;
+  average_full_shipment_delivery_seconds: number | null;
+  average_received_container_delivery_seconds: number | null;
+  period_buckets: AnalyticsPeriodBucket[];
+  by_facility: AnalyticsFacility[];
+};
+
+export type NotificationPayload = {
+  case_type: ShipmentCaseType;
+  shipment_id: string;
+  region_id: string;
+  status: string;
+  last_event_at: string;
+  container_id?: string | null;
+  proposal_id?: string | null;
+};
+
+export type Notification = {
+  id: string;
+  event_id: string;
+  type: string;
+  payload: NotificationPayload;
+  recipient_user_id: string;
+  created_at: string;
+  read_at: string | null;
+};
+
+export type PagedNotification = {
+  items: Notification[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type NotificationUnreadCount = {
+  count: number;
+};
+
+export type OperationsCapabilities = {
+  canUseCourier: boolean;
+  canViewCases: boolean;
+  canViewAnalytics: boolean;
+  caseRegionIds: string[];
+  analyticsRegionIds: string[];
+};
+
+const CASE_ACCESS_ROLES = new Set([
+  'SENDER_OPERATOR',
+  'COURIER',
+  'LAB_OPERATOR',
+  'LAB_MANAGER',
+  'REGIONAL_OPERATIONS',
+]);
+
+const ANALYTICS_ACCESS_ROLES = new Set(['REGIONAL_ANALYST', 'REGIONAL_OPERATIONS']);
+
+export function deriveOperationsCapabilities(user: CurrentUser): OperationsCapabilities {
+  const memberships = user.memberships ?? [];
+  const caseMemberships = memberships.filter((membership) => CASE_ACCESS_ROLES.has(membership.role));
+  const analyticsMemberships = memberships.filter((membership) =>
+    ANALYTICS_ACCESS_ROLES.has(membership.role),
+  );
+  const distinctRegions = (items: CourierMembership[]) =>
+    [...new Set(items.map((membership) => membership.region_id).filter(Boolean))].sort();
+
+  return {
+    canUseCourier: memberships.some((membership) => membership.role === 'COURIER'),
+    canViewCases: caseMemberships.length > 0,
+    canViewAnalytics: analyticsMemberships.length > 0,
+    caseRegionIds: distinctRegions(caseMemberships),
+    analyticsRegionIds: distinctRegions(analyticsMemberships),
+  };
+}
+
 export type OfflineContainer = {
   id: string;
   code: string;

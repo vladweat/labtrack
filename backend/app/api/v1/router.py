@@ -2,7 +2,10 @@
 
 from fastapi import APIRouter
 
+from app.modules.analytics.router import router as analytics_router
 from app.modules.identity.router import router as identity_router
+from app.modules.notifications.router import router as notifications_router
+from app.modules.operations.router import router as operations_router
 from app.modules.organizations.router import router as organizations_router
 from app.modules.samples.router import router as samples_router
 from app.modules.shipments.container_issues import router as container_issues_router
@@ -20,3 +23,6 @@ api_router.include_router(courier_offline_router)
 api_router.include_router(container_issues_router)
 api_router.include_router(custody_incidents_router)
 api_router.include_router(receiving_router)
+api_router.include_router(operations_router)
+api_router.include_router(analytics_router)
+api_router.include_router(notifications_router)

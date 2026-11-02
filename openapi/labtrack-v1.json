@@ -3428,7 +3428,8 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
+            },
+            "description": "Authorized region. Infer it only when the caller has exactly one active region; require region_id when the caller has multiple active regions."
           },
           {
             "name": "organization_id",
@@ -3437,7 +3438,8 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
+            },
+            "description": "Optional aggregate filter within the selected region; it cannot expand region scope."
           },
           {
             "name": "from",
@@ -3551,7 +3553,7 @@
             }
           }
         },
-        "description": "from inclusive; to exclusive; UTC Monday week start; user timezone affects display only"
+        "description": "from inclusive; to exclusive; range selects Shipment.created_at; UTC day boundaries and Monday-start UTC weeks. Available as aggregates only to active REGIONAL_ANALYST and REGIONAL_OPERATIONS members in the selected region. Infer one active region; require region_id for multi-region users. organization_id only narrows the selected region."
       }
     },
     "/scan/resolve": {
@@ -4905,7 +4907,7 @@
           "Operations"
         ],
         "operationId": "listStalledShipments",
-        "summary": "listStalledShipments",
+        "summary": "List PostgreSQL-backed stalled operation cases",
         "parameters": [
           {
             "name": "limit",
@@ -4935,7 +4937,8 @@
             "schema": {
               "type": "string",
               "format": "uuid"
-            }
+            },
+            "description": "Optional authorized-region filter. When omitted, return cases across all regions authorized for the caller; when provided, only narrows results. Every item identifies its region."
           },
           {
             "name": "older_than_seconds",
@@ -4944,7 +4947,8 @@
             "schema": {
               "type": "integer",
               "minimum": 0
-            }
+            },
+            "description": "Minimum case age in seconds, measured from the case event or deadline."
           }
         ],
         "responses": {
@@ -5026,7 +5030,8 @@
               }
             }
           }
-        }
+        },
+        "description": "Active REGIONAL_OPERATIONS can view cases across authorized regions. SENDER_OPERATOR sees owned Shipment Pickup/overdue cases; the assigned COURIER sees their own Pickup/Delivery/overdue cases; destination LAB_OPERATOR sees Delivery/overdue cases; destination LAB_MANAGER additionally sees destination pending-proposal cases. REGIONAL_ANALYST receives no case rows. Optional region_id only narrows results. Each item represents one qualifying case; a Shipment may appear multiple times. The source is PostgreSQL business state, independent of notification delivery. Case age is measured from its threshold-driving event or expected-delivery deadline. Total counts cases before pagination; order oldest last_event_at first, then case type, Shipment ID, and nullable case IDs."
       }
     },
     "/shipments/{shipment_id}/containers/{container_id}/handoffs/delivery/confirm-delivery": {
@@ -6662,6 +6667,14 @@
         "responses": {
           "200": {
             "description": "Success",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -6765,6 +6778,14 @@
         "responses": {
           "200": {
             "description": "Success",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -6847,6 +6868,14 @@
         "responses": {
           "200": {
             "description": "Success",
+            "headers": {
+              "X-Request-ID": {
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -8031,14 +8060,16 @@
           },
           "total": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Distinct Shipments in the Shipment.created_at cohort."
           },
           "by_status": {
             "type": "object",
             "additionalProperties": {
               "type": "integer",
               "minimum": 0
-            }
+            },
+            "description": "Distinct Shipments grouped by latest current status."
           },
           "completed_with_issues": {
             "type": "integer",
@@ -8046,11 +8077,13 @@
           },
           "missing_samples": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Current Sample receipt rows whose result is MISSING."
           },
           "rejected_samples": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Current Sample receipt rows whose result is REJECTED."
           },
           "overdue_active": {
             "type": "integer",
@@ -8062,11 +8095,13 @@
           },
           "container_missing": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Containers whose latest issue outcome is MISSING."
           },
           "container_rejected": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Containers whose latest issue outcome is REJECTED."
           },
           "partially_delivered": {
             "type": "integer",
@@ -8074,7 +8109,8 @@
           },
           "partially_completed_with_issues": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Current COMPLETED_WITH_ISSUES Shipments with more than zero but fewer than all containers RECEIVED."
           },
           "average_received_container_delivery_seconds": {
             "type": [
@@ -8082,7 +8118,7 @@
               "null"
             ],
             "minimum": 0,
-            "description": "Only RECEIVED containers of partially delivered Shipments; pickup to that container receipt, excludes undelivered"
+            "description": "Numerator: sum of confirmed Pickup-to-container-receipt durations. Denominator: RECEIVED containers in partially delivered Shipments. Undelivered containers are not zero-duration observations."
           },
           "period_buckets": {
             "type": "array",
@@ -8102,7 +8138,7 @@
               "null"
             ],
             "minimum": 0,
-            "description": "Only Shipments where ALL containers RECEIVED: confirmed Pickup server time to last container receipt server time"
+            "description": "Numerator: sum of confirmed Pickup-to-last-confirmed-receipt durations. Denominator: Shipments with every container RECEIVED and the required timestamps. Partially and wholly undelivered Shipments are excluded."
           }
         },
         "required": [
@@ -9300,7 +9336,10 @@
           "status": {
             "type": "string",
             "enum": [
+              "DRAFT",
+              "READY_FOR_PICKUP",
               "PICKUP_PENDING",
+              "IN_TRANSIT",
               "DELIVERY_PENDING",
               "DELIVERY_BLOCKED",
               "PARTIALLY_DELIVERED",
@@ -9313,11 +9352,37 @@
           },
           "last_event_at": {
             "type": "string",
-            "format": "date-time"
+            "format": "date-time",
+            "description": "Threshold-driving Handoff/proposal timestamp or Shipment expected_delivery_at deadline."
           },
           "age_seconds": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Whole seconds since last_event_at, using the database clock."
+          },
+          "case_type": {
+            "type": "string",
+            "enum": [
+              "PICKUP_PENDING",
+              "DELIVERY_PENDING",
+              "PROPOSAL_PENDING",
+              "SHIPMENT_OVERDUE"
+            ],
+            "description": "Case threshold/category."
+          },
+          "container_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "proposal_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           }
         },
         "required": [
@@ -9325,9 +9390,13 @@
           "status",
           "region_id",
           "last_event_at",
-          "age_seconds"
+          "age_seconds",
+          "case_type",
+          "container_id",
+          "proposal_id"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "One current PostgreSQL-backed stalled case. The same Shipment may have multiple cases. container_id is set for DELIVERY_PENDING and for a PROPOSAL_PENDING case's associated container; proposal_id is set for PROPOSAL_PENDING."
       },
       "PagedStalledShipment": {
         "type": "object",
@@ -9340,7 +9409,8 @@
           },
           "total": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Total qualifying case count before pagination."
           },
           "limit": {
             "type": "integer",
@@ -9358,7 +9428,8 @@
           "limit",
           "offset"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "Paged stalled cases; total counts cases, not distinct Shipments."
       },
       "ContainerCodeRequest": {
         "type": "object",
@@ -9757,23 +9828,28 @@
           },
           "total_shipments": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Distinct current Shipments in this Shipment.created_at bucket."
           },
           "completed_shipments": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Current Shipments in COMPLETED or COMPLETED_WITH_ISSUES status."
           },
           "partially_delivered_shipments": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Shipments with more than zero but fewer than all containers RECEIVED, including COMPLETED_WITH_ISSUES Shipments."
           },
           "sample_issues": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Count of current receipt rows with MISSING or REJECTED result."
           },
           "container_issues": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Count of containers whose latest issue outcome is MISSING or REJECTED."
           }
         },
         "required": [
@@ -9796,15 +9872,18 @@
           },
           "shipment_count": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Distinct Shipments associated with this sender or destination organization; each Shipment counts once per organization."
           },
           "completed_count": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Associated Shipments currently in COMPLETED or COMPLETED_WITH_ISSUES status."
           },
           "with_issues_count": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "description": "Associated Shipments currently in COMPLETED_WITH_ISSUES status."
           }
         },
         "required": [
@@ -10188,7 +10267,54 @@
           },
           "payload": {
             "type": "object",
-            "additionalProperties": true
+            "properties": {
+              "case_type": {
+                "type": "string",
+                "enum": [
+                  "PICKUP_PENDING",
+                  "DELIVERY_PENDING",
+                  "PROPOSAL_PENDING",
+                  "SHIPMENT_OVERDUE"
+                ]
+              },
+              "shipment_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "region_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "status": {
+                "type": "string"
+              },
+              "last_event_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "container_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              },
+              "proposal_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "case_type",
+              "shipment_id",
+              "region_id",
+              "status",
+              "last_event_at"
+            ],
+            "additionalProperties": false
           },
           "recipient_user_id": {
             "type": "string",

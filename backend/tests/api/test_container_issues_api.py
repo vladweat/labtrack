@@ -25,7 +25,8 @@ def test_stage_e_migration_is_additive_after_delivery() -> None:
     head_revision = script.get_revision(script.get_current_head())
     stage_e_revision = script.get_revision("0005_stage_e")
 
-    assert head_revision.revision == "0009_stage_g_offline"
+    assert head_revision.revision == "0010_notifications"
+    assert head_revision.down_revision == "0009_stage_g_offline"
     assert stage_e_revision.down_revision == "0004_delivery"
 
 

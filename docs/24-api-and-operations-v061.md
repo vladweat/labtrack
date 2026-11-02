@@ -16,7 +16,11 @@
 | POST | `/shipments/{shipment_id}/receiving/complete` | Destination LAB_OPERATOR finalizes receiving after all outcomes and container dispositions are complete |
 | POST | `/shipments/{shipment_id}/receiving/reopen` | Destination LAB_MANAGER reopens completed receiving with a reason |
 | GET | `/shipments/{shipment_id}/receiving/history` | Origin Sender or destination Lab reads receiving sessions and paginated result revisions |
-| GET | `/notifications` | Recipient's Inbox, read/unread filter, cursor/limit pagination |
+| GET | `/courier/shipments/{shipment_id}/offline-manifest` | Currently assigned, active Courier obtains an immutable server-issued PHI-free snapshot |
+| POST | `/courier/sync` | Currently authorized Courier submits 1–20 immutable per-command Pickup/Delivery proposals |
+| GET | `/operations/stalled-shipments` | REGIONAL_OPERATIONS lists PostgreSQL-backed cases across authorized regions; scoped participants see only their own cases |
+| GET | `/analytics/shipments/summary` | Active REGIONAL_ANALYST or REGIONAL_OPERATIONS reads scoped aggregates only |
+| GET | `/notifications` | Recipient's Inbox, read/unread filter, limit/offset pagination |
 | POST | `/notifications/{notification_id}/read` | Mark own notification read idempotently |
 | GET | `/notifications/unread-count` | Number of unread Inbox items for authenticated recipient |
 
@@ -97,15 +101,29 @@ Introduce `PATCH /shipments/{shipment_id}` for scoped Sender in DRAFT with `{"ex
 
 `POST /shipments/{shipment_id}/receiving/complete` accepts an omitted body or `{}` (explicit JSON `null` is rejected) and requires an idempotency key. Completion requires every container terminal (`RECEIVED` or `UNDELIVERED_CLOSED`), at least one received container, results for every received item, no results for undelivered items, and one OPEN session. It closes that session and sets `COMPLETED` only when every container was received and every item is `ACCEPTED`; otherwise it sets `COMPLETED_WITH_ISSUES`.
 
-`POST /shipments/{shipment_id}/receiving/reopen` requires an active destination `LAB_MANAGER`, a nonblank reason, and an idempotency key. It accepts only `COMPLETED` or `COMPLETED_WITH_ISSUES`, creates a new OPEN session with the next sequence, and preserves prior sessions, results and revisions. `GET /shipments/{shipment_id}/receiving/history` is visible to the origin Sender and destination Lab Operator/Manager; `limit` defaults to 20 (maximum 100), `offset` to 0, and applies to the revision history. The feature-branch Alembic head is `0008_stage_f_integrity`, after lifecycle migration `0007_stage_f_lifecycle`. PostgreSQL guards require an active SAMPLE reason code matching each MISSING/REJECTED result, forbid reason/comment values for ACCEPTED or unset results, and require the Shipment to be `COMPLETED` or `COMPLETED_WITH_ISSUES` before a sequence>1 reopen session can be inserted.
+`POST /shipments/{shipment_id}/receiving/reopen` requires an active destination `LAB_MANAGER`, a nonblank reason, and an idempotency key. It accepts only `COMPLETED` or `COMPLETED_WITH_ISSUES`, creates a new OPEN session with the next sequence, and preserves prior sessions, results and revisions. `GET /shipments/{shipment_id}/receiving/history` is visible to the origin Sender and destination Lab Operator/Manager; `limit` defaults to 20 (maximum 100), `offset` to 0, and applies to the revision history. Stage F introduced lifecycle migration `0007_stage_f_lifecycle` and integrity migration `0008_stage_f_integrity`; Stage G adds `0009_stage_g_offline`. PostgreSQL guards require an active SAMPLE reason code matching each MISSING/REJECTED result, forbid reason/comment values for ACCEPTED or unset results, and require the Shipment to be `COMPLETED` or `COMPLETED_WITH_ISSUES` before a sequence>1 reopen session can be inserted.
+
+### Stage G Courier offline API and operations (implemented)
+
+`GET /courier/shipments/{shipment_id}/offline-manifest` checks the active Courier assignment and authorization and persists an immutable snapshot bound to actor, assignment, Shipment and region. It contains sealed container codes/statuses and relevant versions, no patient/sample data; `issued_at` is database time. `POST /courier/sync` validates a batch of 1–20 typed commands, then commits each command independently and in request order. It rechecks current authorization before replay lookup and validates the 24-hour snapshot policy, sealed manifest revision, Pickup phase version and relevant target-container version. It does not use aggregate `Shipment.version` alone.
+
+The sync outcomes are `APPLIED`, `ALREADY_APPLIED`, `REJECTED`, `RETRYABLE`, and `REVIEW_REQUIRED`. Authorized terminal outcomes are persisted with audit and replay identity; masked authorization denials are not recorded, and RETRYABLE is not persisted. Exact ID/body replay returns the original outcome; changed payload cannot reuse the ID. Full response and causal data remain for at least 90 days; explicit compaction retains an immutable tombstone. E2E-06's same-snapshot Pickup→Delivery sequence uses optional `depends_on_command_id`; Delivery can rely on Pickup only when it names an APPLIED command by the same actor for the same Shipment and snapshot and the live relevant versions equal that Pickup's recorded post-state. No generic rebase is allowed.
+
+The React/TypeScript/Vite PWA stores per-user snapshots and immutable commands in IndexedDB; access tokens remain in memory, API traffic is network-only, and the service worker caches only shell assets. It reauthenticates after reload, warns and purges the scoped queue on logout/account change, and syncs in the foreground. A locally pending command is not a server custody event. Production hosting is outside Stage G.
+
+Detailed replay compaction is available as `python -m app.cli compact-offline-replays` from `backend/`. No scheduler is installed. Handoff recommendation: Platform Operations should schedule daily execution after deployment; this cadence is proposed and must be configured by operations. Stage G verification and current branch status are in the [roadmap](19-roadmap-v06.md).
 
 ## 3. Inbox semantics (Q15)
 
 - `GET /notifications?unread_only=true&limit=20&offset=0` returns own notifications (safe event metadata, not patient data). Optional query `unread_only` default false.
 - `POST /notifications/{notification_id}/read` requires active recipient identity and ownership; setting `read_at` twice is idempotent and returns existing representation.
 - `GET /notifications/unread-count` returns `{"count":N}`.
-- `notifications` table deduplicates (recipient_user_id,event_id,type). Celery creates/delivers notifications best effort. A worker outage may delay/miss Inbox entries; **stalled Dashboard queries authoritative PostgreSQL business state** and remains usable.
+- `notifications` table deduplicates (recipient_user_id,event_id,type). Celery creates/delivers notifications best effort. Redis or Celery worker failure may delay or miss Inbox entries; stalled cases are queried from authoritative PostgreSQL and remain visible through those failures. PostgreSQL has no dashboard fallback; an outage may make dashboard APIs unavailable.
 - Notifications to stage participants obey org/region scope; regional escalation excludes row-level Sample data for REGIONAL_ANALYST.
+
+## Request correlation
+
+Every API response includes a server-generated UUID in `X-Request-ID`. The server ignores caller-supplied values for that header and never echoes or logs them. Use the returned UUID to correlate the request with safe structured server logs.
 
 ## 4. Stalled operation monitoring (Q19)
 
@@ -118,13 +136,21 @@ Introduce `PATCH /shipments/{shipment_id}` for scoped Sender in DRAFT with `{"ex
 
 Thresholds are config constants, not compliance SLA. Poll/query from PostgreSQL; never auto-confirm, auto-close, or alter custody just due to timer.
 
+`GET /operations/stalled-shipments` is available to active REGIONAL_OPERATIONS across all their authorized regions. Participants also see only their own scoped cases: SENDER_OPERATOR sees owned Shipment Pickup/overdue cases; the assigned COURIER sees their own Pickup/Delivery/overdue cases; destination LAB_OPERATOR sees Delivery/overdue cases; destination LAB_MANAGER additionally sees destination pending-proposal cases. REGIONAL_ANALYST receives no case rows. The optional `region_id` filter only narrows cases; when omitted, results may span authorized regions and each item includes its `region_id`.
+
+Return one item per qualifying case: `PICKUP_PENDING`, `DELIVERY_PENDING`, `PROPOSAL_PENDING`, or `SHIPMENT_OVERDUE`. A Shipment may therefore occur in multiple items. `total` is the case count before pagination. Order oldest `last_event_at` first, then by case type, Shipment ID and nullable container/proposal IDs. `last_event_at` is the threshold-driving Handoff/proposal timestamp or Shipment deadline, and `age_seconds` is measured from that timestamp. Delivery cases include their `container_id`; proposal cases include both `proposal_id` and the associated `container_id`. Items contain no row-level Sample data. A notification or worker record is not required for a case to appear.
+
 ## 5. Analytics contract (Q16–Q18)
 
 - `GET /analytics/shipments/summary?granularity=day|week&from=...&to=...`. `from` inclusive, `to` exclusive. **UTC calendar boundaries**; weeks start Monday UTC. User locale changes display only.
 - Count each Shipment once according to latest current state; current Sample results use latest accepted receipt revision. Historical event/revision timeline is a **separate** event count; do not count reopening as a new Shipment.
 - `average_full_shipment_delivery_seconds`: among Shipments with **every container RECEIVED**, confirmed Pickup server timestamp → latest confirmed Container Receipt server timestamp. Partially or wholly undelivered Shipments excluded from this average.
 - `average_received_container_delivery_seconds`: among **RECEIVED containers in partially delivered Shipments**, confirmed Shipment Pickup → each received container's server receipt timestamp. Never treat a missing container as a successful zero duration.
-- Facility-level breakdown by sender organization and central destination; read-only analyst sees aggregates only. Define numerator/denominator per metric and count MISSING/REJECTED separately on Sample and Container levels.
+- For the full-delivery mean, numerator is the sum of eligible Pickup-to-last-receipt durations and denominator is the number of Shipments with every container RECEIVED and confirmed Pickup/receipt timestamps. For the partial-delivery mean, numerator is the sum of eligible Pickup-to-container-receipt durations and denominator is the number of RECEIVED containers in partially delivered Shipments. A mean with no eligible observations is null.
+- For this Stage H slice, `Shipment.created_at` selects the current-state cohort for the optional `from`/`to` range. Count `total` and `by_status` by distinct Shipment. Count Sample MISSING/REJECTED from current receipt rows after the latest accepted receipt revision; count container MISSING/REJECTED by each container's latest issue outcome.
+- `partially_completed_with_issues` counts current `COMPLETED_WITH_ISSUES` Shipments with more than zero but fewer than all containers `RECEIVED`. In each period bucket, `partially_delivered_shipments` counts Shipments with more than zero but fewer than all containers `RECEIVED`, including completed mixed (`COMPLETED_WITH_ISSUES`) Shipments. `completed_shipments` counts Shipments currently `COMPLETED` or `COMPLETED_WITH_ISSUES`; `sample_issues` counts current MISSING plus REJECTED receipt rows; `container_issues` counts containers whose latest issue outcome is MISSING or REJECTED.
+- Facility-level breakdown covers sender organizations and the central destination. Include each distinct sender/destination organization once per Shipment. `shipment_count` counts distinct associated Shipments, `completed_count` counts Shipments currently `COMPLETED` or `COMPLETED_WITH_ISSUES`, and `with_issues_count` counts Shipments currently `COMPLETED_WITH_ISSUES`.
+- Active REGIONAL_ANALYST and REGIONAL_OPERATIONS may read aggregates only. The summary has one top-level `region_id`: infer it when exactly one active region is granted; require an authorized `region_id` when multiple are granted. An optional organization filter only narrows results within that region.
 - Event timeline and as-of analytics are not equivalent: v0.6.1 current dashboard is **latest state**, and audit reports are event history.
 
 ## 6. New/relevant error codes

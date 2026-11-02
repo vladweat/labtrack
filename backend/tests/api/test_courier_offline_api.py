@@ -269,11 +269,14 @@ def test_offline_migration_is_additive_after_stage_f_integrity() -> None:
     config.set_main_option("script_location", str(backend / "alembic"))
     config.set_main_option("path_separator", "os")
     script = ScriptDirectory.from_config(config)
-    revision = script.get_revision(script.get_current_head())
+    head_revision = script.get_revision(script.get_current_head())
+    offline_revision = script.get_revision("0009_stage_g_offline")
 
-    assert revision is not None
-    assert revision.revision == "0009_stage_g_offline"
-    assert revision.down_revision == "0008_stage_f_integrity"
+    assert head_revision is not None
+    assert offline_revision is not None
+    assert head_revision.revision == "0010_notifications"
+    assert head_revision.down_revision == "0009_stage_g_offline"
+    assert offline_revision.down_revision == "0008_stage_f_integrity"
 
 
 @pytest.mark.asyncio

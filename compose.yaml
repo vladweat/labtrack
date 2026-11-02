@@ -10,6 +10,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       APP_POSTGRES_USER: ${APP_POSTGRES_USER:-labtrack_app}
       APP_POSTGRES_PASSWORD: ${APP_POSTGRES_PASSWORD:-${POSTGRES_PASSWORD}}
+    networks:
+      - backend
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -26,14 +28,57 @@ services:
     image: redis:7
     pull_policy: never
     command: ["redis-server", "--save", "", "--appendonly", "no"]
-    ports:
-      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    networks:
+      - backend
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
 
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.demo
+    command: ["celery", "-A", "app.workers.celery_app:celery_app", "worker", "--loglevel=INFO"]
+    restart: unless-stopped
+    environment: &worker_environment
+      APP_ENV: development
+      POSTGRES_DB: ${POSTGRES_DB:-labtrack}
+      APP_POSTGRES_USER: ${APP_POSTGRES_USER:-labtrack_app}
+      APP_POSTGRES_PASSWORD: ${APP_POSTGRES_PASSWORD:-${POSTGRES_PASSWORD}}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      CELERY_BROKER_URL: redis://redis:6379/0
+      STALLED_NOTIFICATION_SCAN_SECONDS: "300"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.demo
+    command:
+      ["celery", "-A", "app.workers.celery_app:celery_app", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
+    restart: unless-stopped
+    environment: *worker_environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
+
 volumes:
   postgres_data:
     name: labtrack_dev_postgres_data
+
+networks:
+  backend:
+    internal: true

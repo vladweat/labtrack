@@ -3,7 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL
 
@@ -30,12 +30,17 @@ class Settings(BaseSettings):
     app_postgres_password: SecretStr = SecretStr("labtrack-local-only-change-me")
     postgres_host: str = "127.0.0.1"
     postgres_port: int = 5432
+    celery_broker_url: SecretStr = SecretStr("redis://127.0.0.1:6379/0")
     jwt_secret_key: SecretStr = SecretStr(DEVELOPMENT_JWT_SECRET)
     jwt_issuer: str = "labtrack-api"
     jwt_audience: str = "labtrack-client"
     jwt_access_token_minutes: int = 15
     destination_organization_code: str = "CENTRAL_LAB"
     log_level: str = "INFO"
+    stalled_pickup_seconds: int = Field(default=4 * 60 * 60, gt=0)
+    stalled_delivery_seconds: int = Field(default=4 * 60 * 60, gt=0)
+    stalled_proposal_seconds: int = Field(default=24 * 60 * 60, gt=0)
+    stalled_notification_scan_seconds: int = Field(default=300, gt=0)
 
     @model_validator(mode="after")
     def require_secure_jwt_secret(self) -> "Settings":

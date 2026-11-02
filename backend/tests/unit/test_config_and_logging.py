@@ -30,10 +30,14 @@ def test_json_logs_include_request_correlation_without_credentials() -> None:
         level=logging.INFO,
         pathname=__file__,
         lineno=1,
-        msg="request completed",
+        msg="unhandled_api_exception",
         args=(),
         exc_info=None,
     )
+    record.error_type = "RuntimeError"
+    record.detail = "Injected private exception detail"
+    record.password = "private-password"
+    record.access_token = "private-access-token"
     try:
         payload = json.loads(JsonFormatter().format(record))
     finally:
@@ -41,6 +45,11 @@ def test_json_logs_include_request_correlation_without_credentials() -> None:
 
     assert payload["request_id"] == request_id
     assert payload["level"] == "INFO"
-    assert payload["message"] == "request completed"
+    assert payload["message"] == "unhandled_api_exception"
+    assert payload["error_type"] == "RuntimeError"
+    serialized = json.dumps(payload)
+    assert "Injected private exception detail" not in serialized
+    assert "private-password" not in serialized
+    assert "private-access-token" not in serialized
     assert "password" not in payload
     assert "access_token" not in payload

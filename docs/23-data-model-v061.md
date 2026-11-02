@@ -1,6 +1,6 @@
 # LabTrack v0.6.1 — PostgreSQL Delta & Integrity Rules
 
-**Status:** Alembic revisions `0001_foundation_identity` through `0005_stage_e` implement Stages A–E, including ContainerIssue proposals, custody incidents and attestations, and NORMAL/EXCEPTIONAL receipt evidence. Offline, Inbox, analytics, and other unimplemented v0.6.1 schema changes below remain design. Build on [v0.6 relational model](17-data-model-v06.md); preserve Shipment-first locking, partially delivered receiving, and sealed manifest triggers. User-approved changes: [20-decisions-v061.md](20-decisions-v061.md).
+**Status (2026-11-02):** revisions `0001`–`0009_stage_g_offline` implement merged Stages A–G at `main`/`origin/main` `11c7804`; Stage G is independently verified. The current uncommitted Stage H tree adds migration `0010_notifications` for the Inbox, but that migration has not been applied or runtime-verified. Analytics currently reads current PostgreSQL state without a persistence schema. ContainerIssue/custody evidence and NORMAL/EXCEPTIONAL receipt are in Stage E; append-only receiving revisions/lifecycle guards are in Stage F; Stage G adds the offline tables/fields below. Preserve Shipment-first locking, partially delivered receiving, and sealed manifest triggers. User-approved changes: [20-decisions-v061.md](20-decisions-v061.md).
 
 ## 1. New tables (proposed physical mapping)
 
@@ -9,11 +9,11 @@
 | `custody_incidents` | id, shipment_id, container_id NULL, handoff_id NULL, phase, kind, status, reason, opened_by/at, resolved_by/at NULL, resolution NULL | Scoped incident and human review; **not** a third MISSING/REJECTED type |
 | `custody_attestations` | id, incident_id, user_id, org_id_at_time, role_at_time, container_code NULL, statement, physically_present NULL, physical_release_occurred NULL, containers_at_origin NULL, recorded_at | Unique (incident_id,user_id); append-only; one account counts once. Pickup attestation has origin facts; Delivery attestation asserts personal physical presence |
 | `container_receipt_evidence` | id, container_id, method NORMAL|EXCEPTIONAL, handoff_id NULL, incident_id NULL, verified_at/by | Exactly one verified receipt per container; method-specific FK shape (XOR) |
-| `courier_manifest_snapshots` | id, shipment_id, issued_to_user_id, manifest_revision, shipment_phase_version, issued_at, container_versions payload or child rows, digest | Immutable issue time, scoped to Courier; no private patient data |
-| `offline_command_tombstones` | actor_id, client_command_id, request_hash, event_id, applied_at, compact_response/status | Unique actor+client_command_id under fixed offline namespace; survives full-response cleanup |
+| `courier_manifest_snapshots` | id, actor_user_id, assigned_courier_user_id, shipment_id, region_id, manifest_revision, pickup_state_version, issued_at, policy_version, container_payload | Immutable server time and PHI-free manifest/version payload, bound to actor, current assignment, Shipment and region |
+| `offline_command_tombstones` | actor_user_id, client_command_id, request_hash, original_outcome, recorded_at, audit_event_id, replay_response | Unique actor+command ID; deliberately no user FK, so deleting an actor cannot release the ID; immutable across replay compaction |
 | `notifications` | id, recipient_user_id, event_id, type, payload JSONB, created_at, read_at NULL | Personal inbox, idempotent natural key (recipient_user_id,event_id,type) |
 
-For the full 90-day detailed replay use existing `idempotency_records` with durable `request_hash` and response. Preserve compact tombstone after detailed record expires. Avoid reusing an expired key as new custody command.
+For the full 90-day detailed replay, `idempotency_records` stores the canonical `request_hash`, response, `offline_retention_expires_at`, and optional causal metadata. Compaction removes expired detailed response/causal data while retaining the tombstone's minimal outcome and identity. Avoid reusing a command ID after detail expires.
 
 **Receipt evidence (OPEN-01–03 APPROVED):** use partial/composite FK and protected service invariants: NORMAL requires a confirmed DELIVERY Handoff of that container; EXCEPTIONAL requires a previously CONFIRMED whole-Shipment Pickup, **resolved incident**, two physically present, authenticated **distinct destination-laboratory employees** as witnesses with **at least one active LAB_MANAGER**, and a **REGIONAL_OPERATIONS administrative finalizer who is not a witness**. One verified receipt evidence per container, immutable. Verify current actor memberships and physical-presence attestations under Shipment lock with audit; DB FKs alone cannot attest human physical presence.
 
@@ -41,6 +41,8 @@ For the full 90-day detailed replay use existing `idempotency_records` with dura
 ### Offline version relevance (OPEN-04)
 
 Do not reject a Courier command merely because `Shipment.version` changed due to a different container's Sample outcome. Compare `manifest_revision`, **target** Container/Handoff custody version, confirmed Pickup phase/version, Courier assignment and active authorization. For whole-Shipment Pickup, compare Pickup phase/handoff version and complete manifest. Any relevant change (including an ABA target-state cycle) is stale. Version increments and checks occur under Shipment parent lock, and no relevant stale command is automatically rebased.
+
+Stage G adds `transport_containers.state_version BIGINT` and `shipments.pickup_state_version BIGINT`; PostgreSQL guards reject direct reset/increment outside the guarded custody transitions. Snapshot versions are persisted with the PHI-free container code/status/version list. `idempotency_records` carries 90-day detail expiry and linked-command post-state metadata; the immutable tombstone preserves replay after compaction.
 
 ### `transport_containers`, `shipments`
 - Add monotonically increasing `transport_containers.state_version BIGINT NOT NULL DEFAULT 1`. Every custody state/handoff attempt mutation for that container increments version, even state ABA.
@@ -107,4 +109,4 @@ Checks: receipt evidence XOR normal_handoff_id/incident_id; immutable evidence; 
 7. Add incident/evidence models with **approved witness/pickup/role guards** and unit + PostgreSQL tests; feature flag may be used for controlled rollout but no product sign-off remains pending.
 8. Apply real Alembic migrations against PostgreSQL, validate upgrade and rollback/forward on disposable DB; test row-level security boundaries at application layer.
 
-Stage E's schema and guards are implemented in `0005_stage_e` and passed the PostgreSQL migration cycle and backend acceptance suite. Remaining migration items in this design—including offline command tombstones and Inbox tables—are not claimed as implemented.
+Stages E–G schema and guards are implemented through `0009_stage_g_offline` and passed independent PostgreSQL migration-cycle and backend verification; they are merged to `main`. The uncommitted Stage H `0010_notifications` migration adds the Inbox table but has not been applied or verified. Analytics uses read-time queries and has no snapshot persistence table.

@@ -1,6 +1,6 @@
 # LabTrack — медицинская логистика, архитектура и API
 
-**Текущая спецификация:** **LabTrack v0.6.1 — APPROVED / FROZEN для MVP** (19 решений hardening + все OPEN-01–04 утверждены 2026-11-01; Stage F receiving operations согласованы со static OpenAPI и проверены, остальные MVP workflows остаются design contract).
+**Текущая спецификация:** **LabTrack v0.6.1 — APPROVED / FROZEN для синтетического MVP** (19 решений hardening + все OPEN-01–04 утверждены 2026-11-01). Stages A–G опубликованы в `main` (`11c7804`). Stage H выполняется в незакоммиченном рабочем дереве. Изолированная Stage H runtime-проверка включает 8 прошедших backend-тестов, браузерный flow через локальный API source и ограниченный Celery worker/Beat startup smoke. Публичное синтетическое Courier demo на `https://labtrack.wvzl.site` не обновлялось и остаётся Stage G.
 **Цель:** production-like MVP на синтетических данных, без реального медицинского документооборота.
 
 LabTrack — система прослеживаемости передачи лабораторных пробирок в маркированных контейнерах от медицинских учреждений через курьеров в одну центральную лабораторию пилотного региона.
@@ -15,7 +15,7 @@ LabTrack — система прослеживаемости передачи л
 4. **[PostgreSQL Data Model v0.6.1](docs/23-data-model-v061.md)** — новые таблицы, индексы, RBAC guards, транзакции, версии контейнеров.
 5. **[API & Operations v0.6.1](docs/24-api-and-operations-v061.md)** — draft deadline editing, notifications/inbox, аналитика UTC, staggered thresholds.
 6. **[Test Plan v0.6.1](docs/25-test-plan-v061.md)** — negative, security, concurrency, E2E и implementation gates.
-7. **[OpenAPI v0.6.1](openapi/labtrack-v1.json)** — машинно-читаемый проект контракта; receiving operations Stage F согласованы с runtime и проверены, остальные workflows остаются нормативными требованиями.
+7. **[OpenAPI v0.6.1](openapi/labtrack-v1.json)** — машинно-читаемый контракт; Stage F receiving и Stage G Courier offline операции сверяются с runtime тестами, остальная спецификация остаётся нормативным требованием.
 
 Нормативная база v0.6 для **неизменённых** сценариев остаётся действующей, особенно [частичная доставка](docs/16-domain-workflows-v06.md) и [основной DB design](docs/17-data-model-v06.md). При конфликте приоритет: **утверждённые решения v0.6.1 → нормативные v0.6.1 Domain/DB/API → неизменённые правила v0.6 → ранние версии**.
 
@@ -45,8 +45,6 @@ LabTrack — система прослеживаемости передачи л
 
 ## Локальное инфраструктурное окружение
 
-В Compose настроены PostgreSQL и Redis. Backend реализует Foundation, Manifest, Pickup, per-container Delivery и Stage E; Stage F receiving/reopening реализован в указанной feature branch. Используются локальные образы `postgres:15` и `redis:7`; если какого-либо образа нет, запуск завершится ошибкой и не будет скачивать его.
-
 ```bash
 test -f .env || cp .env.example .env
 docker compose up -d
@@ -67,4 +65,4 @@ docker compose down
 
 ## Backend scaffold
 
-В `backend/` находится модульная структура FastAPI для этапов Foundation–Stage F. Версия Python для проекта — 3.12. Установка, миграция и запуск описаны в [backend/README.md](backend/README.md). После Stage F следующими остаются Stage G offline PWA и Stage H product finish.
+В `backend/` находится модульная структура FastAPI; версия Python — 3.12. Установка, миграция и запуск описаны в [backend/README.md](backend/README.md). Courier PWA и локальная проверка описаны в [web/README.md](web/README.md). Публичный demo доступен удалённым зрителям, но развернутый сервис пока предоставляет только Courier-интерфейс с одной общей учётной записью и одним изменяемым синтетическим Shipment. Stage H конфигурация и интерфейсы ещё не развернуты на публичном хосте; автоматические backup/reset и ограничение частоты входа там не настроены. Используйте только синтетические данные.

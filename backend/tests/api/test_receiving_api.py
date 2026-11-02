@@ -21,6 +21,7 @@ from test_delivery_api import authorize_lab_operator, confirm_pickup
 from test_pickup_api import PASSWORD, create_pickup_fixture
 
 from app.core.config import get_settings
+from app.core.logging import JsonFormatter
 from app.core.security import hash_password
 from app.db.base import Base
 from app.db.session import get_db_session, get_session_factory
@@ -186,10 +187,12 @@ def test_stage_f_migration_is_additive_after_stage_e() -> None:
     script = ScriptDirectory.from_config(config)
     head = script.get_current_head()
     revision = script.get_revision(head)
+    stage_g_revision = script.get_revision("0009_stage_g_offline")
     stage_f_revision = script.get_revision("0006_stage_f")
 
-    assert revision.revision == "0009_stage_g_offline"
-    assert revision.down_revision == "0008_stage_f_integrity"
+    assert revision.revision == "0010_notifications"
+    assert revision.down_revision == "0009_stage_g_offline"
+    assert stage_g_revision.down_revision == "0008_stage_f_integrity"
     assert script.get_revision("0007_stage_f_lifecycle").down_revision == "0006_stage_f"
     assert stage_f_revision.down_revision == "0005_stage_e"
 
@@ -2154,7 +2157,16 @@ async def test_completion_audit_failure_rolls_back_session_shipment_and_idempote
             response = await complete_receiving(client, context, lab_auth, key)
         assert response.status_code == 500
         assert response.json()["error"]["code"] == "INTERNAL_ERROR"
-        assert "Injected receiving completion audit failure" in caplog.text
+        error_record = next(
+            record
+            for record in caplog.records
+            if record.name == "app.main" and record.msg == "unhandled_api_exception"
+        )
+        error_payload = json.loads(JsonFormatter().format(error_record))
+        assert error_payload["message"] == "unhandled_api_exception"
+        assert error_payload["error_type"] == "DBAPIError"
+        assert "Injected receiving completion audit failure" not in caplog.text
+        assert "Injected receiving completion audit failure" not in json.dumps(error_payload)
     finally:
         async with owner_engine.begin() as connection:
             await connection.execute(

@@ -1,6 +1,7 @@
 """ASGI application entry point."""
 
 import logging
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -88,7 +89,7 @@ async def documented_validation_error(
 async def documented_internal_error(request: Request, exc: Exception) -> JSONResponse:
     """Hide internal exception details while preserving request correlation."""
 
-    logger.exception("unhandled API exception")
+    logger.error("unhandled_api_exception", extra={"error_type": type(exc).__name__})
     payload = APIErrorResponse(
         error={
             "code": "INTERNAL_ERROR",
@@ -104,9 +105,29 @@ async def documented_internal_error(request: Request, exc: Exception) -> JSONRes
 async def add_request_id(request: Request, call_next):
     request_id = normalized_request_id(request.headers.get("X-Request-ID"))
     context_token = request_id_var.set(request_id)
+    started_at = time.monotonic()
     try:
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            # The generic exception handler is installed outside user middleware by
+            # Starlette. Handle it here as well so 500 responses get completion logs.
+            response = await documented_internal_error(request, exc)
         response.headers["X-Request-ID"] = request_id
+        route = request.scope.get("route")
+        route_template = getattr(route, "path", None)
+        if not isinstance(route_template, str) or not route_template:
+            route_template = "unmatched"
+        logger.info(
+            "request_completed",
+            extra={
+                "request_id": request_id,
+                "http_method": request.method,
+                "route_template": route_template,
+                "status": response.status_code,
+                "duration_ms": round((time.monotonic() - started_at) * 1000, 3),
+            },
+        )
         return response
     finally:
         request_id_var.reset(context_token)
@@ -126,7 +147,7 @@ async def health_ready() -> JSONResponse | dict[str, str]:
     try:
         async with get_engine().connect() as connection:
             await connection.execute(text("SELECT 1"))
-    except (SQLAlchemyError, OSError):
-        logger.exception("database readiness probe failed")
+    except (SQLAlchemyError, OSError) as exc:
+        logger.error("database_readiness_probe_failed", extra={"error_type": type(exc).__name__})
         return JSONResponse(status_code=503, content={"status": "unavailable"})
     return {"status": "ok"}

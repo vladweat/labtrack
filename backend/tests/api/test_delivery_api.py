@@ -32,8 +32,13 @@ def test_delivery_schema_is_an_additive_migration_after_pickup() -> None:
     backend = Path(__file__).resolve().parents[2]
     config = Config(str(backend / "alembic.ini"))
     config.set_main_option("script_location", str(backend / "alembic"))
-    head = ScriptDirectory.from_config(config).get_current_head()
-    assert head == "0009_stage_g_offline"
+    script = ScriptDirectory.from_config(config)
+    head_revision = script.get_revision(script.get_current_head())
+    delivery_revision = script.get_revision("0004_delivery")
+
+    assert head_revision.revision == "0010_notifications"
+    assert head_revision.down_revision == "0009_stage_g_offline"
+    assert delivery_revision.down_revision == "0003_pickup"
 
 
 async def authorize_lab_operator(shipment_id: str, client: AsyncClient) -> dict[str, str]:
