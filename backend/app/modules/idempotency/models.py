@@ -38,6 +38,7 @@ class IdempotencyRecord(Base):
     operation: Mapped[str] = mapped_column(String(160), nullable=False)
     key: Mapped[str] = mapped_column(String(128), nullable=False)
     request_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_context: Mapped[dict[str, str] | None] = mapped_column(JSONB)
     response_status: Mapped[int | None] = mapped_column(Integer)
     response_body: Mapped[dict | None] = mapped_column(JSONB)
     offline_retention_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -36,8 +36,8 @@ def test_delivery_schema_is_an_additive_migration_after_pickup() -> None:
     head_revision = script.get_revision(script.get_current_head())
     delivery_revision = script.get_revision("0004_delivery")
 
-    assert head_revision.revision == "0010_notifications"
-    assert head_revision.down_revision == "0009_stage_g_offline"
+    assert head_revision.revision == "0011_http_request_scope"
+    assert head_revision.down_revision == "0010_notifications"
     assert delivery_revision.down_revision == "0003_pickup"
 
 
@@ -316,7 +316,12 @@ async def test_delivery_withdrawal_reason_and_retry_attempt_number() -> None:
             )
         )
         assert any(
-            event.details == {"reason": "Контейнер не был предъявлен лаборатории"}
+            event.details
+            == {
+                "reason": "Контейнер не был предъявлен лаборатории",
+                "shipment_id": context["shipment_id"],
+                "container_id": container["id"],
+            }
             for event in events
         )
 

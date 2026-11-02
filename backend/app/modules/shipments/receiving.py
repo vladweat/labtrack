@@ -271,6 +271,7 @@ async def record_receipt(
         actor_id=principal.user_id,
         operation=operation,
         key=idempotency_key,
+        request_context={"shipment_id": str(shipment_id), "item_id": str(item_id)},
         request_data=payload.root.model_dump(mode="json"),
         action=action,
         audit_details={
@@ -416,6 +417,7 @@ async def complete_receiving(
         actor_id=principal.user_id,
         operation=operation,
         key=idempotency_key,
+        request_context={"shipment_id": str(shipment_id)},
         request_data=request_data,
         action=action,
         audit_details={"shipment_id": str(shipment_id)},
@@ -501,6 +503,7 @@ async def reopen_receiving(
         actor_id=principal.user_id,
         operation=operation,
         key=idempotency_key,
+        request_context={"shipment_id": str(shipment_id)},
         request_data=payload.model_dump(mode="json"),
         action=action,
         audit_details={"shipment_id": str(shipment_id), "reason": payload.reason},

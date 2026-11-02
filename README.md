@@ -1,8 +1,5 @@
 # LabTrack — медицинская логистика, архитектура и API
 
-**Текущая спецификация:** **LabTrack v0.6.1 — APPROVED / FROZEN для синтетического MVP** (19 решений hardening + все OPEN-01–04 утверждены 2026-11-01). Stages A–G опубликованы в `main` (`11c7804`). Stage H выполняется в незакоммиченном рабочем дереве. Изолированная Stage H runtime-проверка включает 8 прошедших backend-тестов, браузерный flow через локальный API source и ограниченный Celery worker/Beat startup smoke. Публичное синтетическое Courier demo на `https://labtrack.wvzl.site` не обновлялось и остаётся Stage G.
-**Цель:** production-like MVP на синтетических данных, без реального медицинского документооборота.
-
 LabTrack — система прослеживаемости передачи лабораторных пробирок в маркированных контейнерах от медицинских учреждений через курьеров в одну центральную лабораторию пилотного региона.
 
 ## Текущий источник истины — v0.6.1
@@ -41,6 +38,11 @@ LabTrack — система прослеживаемости передачи л
 
 ## Статус и границы
 
+**Foundation / Stage A завершён:** typed runtime settings, async SQLAlchemy session, identity/scope schema, явный Alembic migration с проверкой drift, login с Argon2id и коротким identity-only JWT, проверка active memberships и scoped RBAC, `/health/live`, `/health/ready`, JSON request-correlated logs. Команды пользователя и scoped membership доступны оператору из backend CLI; проверки Foundation и Manifest описаны в [backend README](backend/README.md).
+**Stages A–G опубликованы в `main` (`11c7804`).** Stage F добавляет receiving/reopen lifecycle с append-only revisions и PostgreSQL guards. Stage G добавляет миграцию `0009_stage_g_offline`, PHI-free snapshots, per-command replay/tombstones и Courier PWA. Его финальная проверка прошла 185 backend tests, migration cycle, OpenAPI/app-role и web checks; публичный Courier demo проверен отдельно. Demo остаётся синтетическим, Courier-only и без автоматического reset, backup или login rate limit.
+
+**Stage H committed и pushed в `main` (`5320784`), но ещё не развёрнут.** Включает stalled-case/analytics APIs, Inbox/Celery, Operations UI, structured request/worker logs и ручные backup/load инструменты. Финальная локальная проверка: 193 backend tests, 11 Chromium E2E, web lint/unit/TypeScript/build, Ruff, Alembic drift check и Compose config прошли. Изолированные browser/API и worker/Beat startup checks также прошли; они не проверяли production image, scheduled task или notification delivery. Backup/restore выполнялись только на изолированных синтетических БД, не на живом demo.
+
 Все данные демонстрационные. Непрозрачные ссылки на ЛИС не гарантируют анонимность в реальном окружении. Перед реальным пилотом нужно отдельно подтвердить юридическую ответственность за физический контейнер, правила offline-разрешения, регламенты медицинской логистики, хранение данных, безопасность и процедуры восстановления.
 
 ## Локальное инфраструктурное окружение
@@ -65,4 +67,4 @@ docker compose down
 
 ## Backend scaffold
 
-В `backend/` находится модульная структура FastAPI; версия Python — 3.12. Установка, миграция и запуск описаны в [backend/README.md](backend/README.md). Courier PWA и локальная проверка описаны в [web/README.md](web/README.md). Публичный demo доступен удалённым зрителям, но развернутый сервис пока предоставляет только Courier-интерфейс с одной общей учётной записью и одним изменяемым синтетическим Shipment. Stage H конфигурация и интерфейсы ещё не развернуты на публичном хосте; автоматические backup/reset и ограничение частоты входа там не настроены. Используйте только синтетические данные.
+В `backend/` находится модульная структура FastAPI; версия Python — 3.12. Установка, миграция и запуск описаны в [backend/README.md](backend/README.md). Courier PWA и локальная проверка описаны в [web/README.md](web/README.md). Публичный demo доступен удалённым зрителям, но сейчас предоставляет только Courier-интерфейс с одной общей учётной записью и одним изменяемым синтетическим Shipment. Stage H опубликован в `main`, но ещё не развёрнут из-за отсутствующих base images/registry access; автоматические backup/reset и ограничение частоты входа там не настроены. Используйте только синтетические данные.

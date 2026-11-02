@@ -1,13 +1,17 @@
 """Custody incident and first-party attestation acceptance tests."""
 
 import asyncio
+import hashlib
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import create_async_engine
 from test_delivery_api import confirm_pickup
@@ -15,10 +19,12 @@ from test_pickup_api import PASSWORD, create_pickup_fixture
 
 from app.core.config import get_settings
 from app.core.security import hash_password
-from app.db.session import get_session_factory
+from app.db.session import get_engine, get_session_factory
 from app.main import app
+from app.modules.audit.models import AuditEvent
+from app.modules.idempotency.models import IdempotencyRecord
 from app.modules.identity.models import Membership, User
-from app.modules.shipments.models import Shipment
+from app.modules.shipments.models import CustodyIncident, Shipment
 
 
 def openapi_schema_shape(
@@ -330,6 +336,266 @@ async def test_regional_operator_opens_and_lists_scoped_incident() -> None:
     assert created.json()["container_id"] == context["container_id"]
     assert listed.status_code == 200
     assert listed.json()["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_incident_create_key_cannot_replay_to_another_shipment() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        first_context = await create_pickup_fixture(client)
+        second_context = await create_pickup_fixture(client)
+        regional_auth = await authorize_region(
+            await shipment_region(first_context["shipment_id"]), client
+        )
+        key = f"cross-shipment-incident-{uuid4().hex}"
+        payload = {
+            "phase": "PICKUP",
+            "kind": "PICKUP_UNCONFIRMED",
+            "container_id": None,
+            "reason": "Courier did not confirm pickup",
+        }
+        first = await client.post(
+            f"/api/v1/shipments/{first_context['shipment_id']}/custody-incidents",
+            headers={**regional_auth, "Idempotency-Key": key},
+            json=payload,
+        )
+        second = await client.post(
+            f"/api/v1/shipments/{second_context['shipment_id']}/custody-incidents",
+            headers={**regional_auth, "Idempotency-Key": key},
+            json=payload,
+        )
+        second_incidents = await client.get(
+            f"/api/v1/shipments/{second_context['shipment_id']}/custody-incidents",
+            headers=regional_auth,
+        )
+
+    assert first.status_code == 201, first.text
+    assert first.json()["shipment_id"] == first_context["shipment_id"]
+    assert second.status_code == 409, second.text
+    assert second_incidents.status_code == 200, second_incidents.text
+    assert second_incidents.json()["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_incident_create_persists_path_scope_separately_from_body_hash() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        regional_auth, actor_id = await authorize_region(
+            await shipment_region(context["shipment_id"]), client, return_user_id=True
+        )
+        key = f"incident-scope-persistence-{uuid4().hex}"
+        payload = {
+            "phase": "PICKUP",
+            "kind": "PICKUP_UNCONFIRMED",
+            "container_id": None,
+            "reason": "Persist route scope apart from the validated body",
+        }
+        created = await client.post(
+            f"/api/v1/shipments/{context['shipment_id']}/custody-incidents",
+            headers={**regional_auth, "Idempotency-Key": key},
+            json=payload,
+        )
+
+    body_hash = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+    ).hexdigest()
+    async with get_session_factory()() as session:
+        record = await session.scalar(
+            select(IdempotencyRecord).where(
+                IdempotencyRecord.actor_user_id == UUID(actor_id),
+                IdempotencyRecord.operation == "shipment.custody_incident.create",
+                IdempotencyRecord.key == key,
+            )
+        )
+        audit = await session.scalar(
+            select(AuditEvent).where(
+                AuditEvent.actor_user_id == UUID(actor_id),
+                AuditEvent.operation == "shipment.custody_incident.create",
+                AuditEvent.request_key == key,
+            )
+        )
+
+    assert created.status_code == 201, created.text
+    assert record is not None
+    assert record.request_hash == body_hash
+    assert record.request_context == {"shipment_id": context["shipment_id"]}
+    assert audit is not None
+    assert audit.details["shipment_id"] == context["shipment_id"]
+
+
+@pytest.mark.asyncio
+async def test_incident_resolution_key_cannot_replay_to_another_incident() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        first_context = await create_pickup_fixture(client)
+        second_context = await create_pickup_fixture(client)
+        regional_auth = await authorize_region(
+            await shipment_region(first_context["shipment_id"]), client
+        )
+        incident_payload = {
+            "phase": "PICKUP",
+            "kind": "PICKUP_UNCONFIRMED",
+            "container_id": None,
+            "reason": "Courier did not confirm pickup",
+        }
+        first_incident = await client.post(
+            f"/api/v1/shipments/{first_context['shipment_id']}/custody-incidents",
+            headers={**regional_auth, "Idempotency-Key": f"open-first-{uuid4().hex}"},
+            json=incident_payload,
+        )
+        second_incident = await client.post(
+            f"/api/v1/shipments/{second_context['shipment_id']}/custody-incidents",
+            headers={**regional_auth, "Idempotency-Key": f"open-second-{uuid4().hex}"},
+            json=incident_payload,
+        )
+        assert first_incident.status_code == second_incident.status_code == 201
+
+        resolution_payload = {
+            "resolution": "ESCALATED_NO_CUSTODY_CHANGE",
+            "reason": "Escalated for regional review",
+        }
+        key = f"cross-incident-resolution-{uuid4().hex}"
+        first_resolution = await client.post(
+            f"/api/v1/shipments/{first_context['shipment_id']}/custody-incidents/"
+            f"{first_incident.json()['id']}/resolve",
+            headers={**regional_auth, "Idempotency-Key": key},
+            json=resolution_payload,
+        )
+        second_resolution = await client.post(
+            f"/api/v1/shipments/{second_context['shipment_id']}/custody-incidents/"
+            f"{second_incident.json()['id']}/resolve",
+            headers={**regional_auth, "Idempotency-Key": key},
+            json=resolution_payload,
+        )
+
+    async with get_session_factory()() as session:
+        second_incident_row = await session.scalar(
+            select(CustodyIncident).where(CustodyIncident.id == UUID(second_incident.json()["id"]))
+        )
+
+    assert first_resolution.status_code == 200, first_resolution.text
+    assert first_resolution.json()["id"] == first_incident.json()["id"]
+    assert second_resolution.status_code == 409, second_resolution.text
+    assert second_incident_row is not None
+    assert second_incident_row.status == "OPEN"
+    assert second_incident_row.resolved_by is None
+
+
+def _run_alembic(
+    arguments: list[str], cwd: Path, env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "alembic", *arguments],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_scope_migration_recovers_known_target_and_rejects_unknown_one() -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        first_context = await create_pickup_fixture(client)
+        second_context = await create_pickup_fixture(client)
+        regional_auth, actor_id = await authorize_region(
+            await shipment_region(first_context["shipment_id"]), client, return_user_id=True
+        )
+        payload = {
+            "phase": "PICKUP",
+            "kind": "PICKUP_UNCONFIRMED",
+            "container_id": None,
+            "reason": "Legacy incident target for migration replay",
+        }
+        replay_key = f"legacy-scope-replay-{uuid4().hex}"
+        original = await client.post(
+            f"/api/v1/shipments/{first_context['shipment_id']}/custody-incidents",
+            headers={**regional_auth, "Idempotency-Key": replay_key},
+            json=payload,
+        )
+        assert original.status_code == 201, original.text
+
+    backend = Path(__file__).resolve().parents[2]
+    env = os.environ.copy()
+    await get_engine().dispose()
+    downgraded = await asyncio.to_thread(
+        _run_alembic, ["downgrade", "0010_notifications"], backend, env
+    )
+    assert downgraded.returncode == 0, downgraded.stderr
+
+    unrecoverable_key = f"legacy-scope-unknown-{uuid4().hex}"
+    request_hash = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+    ).hexdigest()
+    audit_event_id = uuid4()
+    idempotency_record_id = uuid4()
+    try:
+        async with get_session_factory()() as session:
+            await session.execute(
+                text(
+                    "INSERT INTO audit_events "
+                    "(id, actor_user_id, operation, request_key, request_hash, "
+                    "resource_id, details) "
+                    "VALUES (:id, :actor_id, :operation, :request_key, :request_hash, "
+                    ":resource_id, "
+                    "CAST(:details AS jsonb))"
+                ),
+                {
+                    "id": audit_event_id,
+                    "actor_id": UUID(actor_id),
+                    "operation": "shipment.custody_incident.create",
+                    "request_key": unrecoverable_key,
+                    "request_hash": request_hash,
+                    "resource_id": original.json()["id"],
+                    "details": json.dumps({"phase": "PICKUP"}),
+                },
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO idempotency_records "
+                    "(id, actor_user_id, operation, key, request_hash, response_status, "
+                    "response_body) "
+                    "VALUES (:id, :actor_id, :operation, :key, :request_hash, :response_status, "
+                    "CAST(:response_body AS jsonb))"
+                ),
+                {
+                    "id": idempotency_record_id,
+                    "actor_id": UUID(actor_id),
+                    "operation": "shipment.custody_incident.create",
+                    "key": unrecoverable_key,
+                    "request_hash": request_hash,
+                    "response_status": 201,
+                    "response_body": json.dumps(original.json()),
+                },
+            )
+            await session.commit()
+    finally:
+        await get_engine().dispose()
+        upgraded = await asyncio.to_thread(_run_alembic, ["upgrade", "head"], backend, env)
+        await get_engine().dispose()
+
+    assert upgraded.returncode == 0, upgraded.stderr
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        recovered_replay = await client.post(
+            f"/api/v1/shipments/{first_context['shipment_id']}/custody-incidents",
+            headers={**regional_auth, "Idempotency-Key": replay_key},
+            json=payload,
+        )
+        unknown_target_replay = await client.post(
+            f"/api/v1/shipments/{second_context['shipment_id']}/custody-incidents",
+            headers={**regional_auth, "Idempotency-Key": unrecoverable_key},
+            json=payload,
+        )
+
+    async with get_session_factory()() as session:
+        target_incident_count = await session.scalar(
+            text("SELECT count(*) FROM custody_incidents WHERE shipment_id = :shipment_id"),
+            {"shipment_id": UUID(second_context["shipment_id"])},
+        )
+
+    assert recovered_replay.status_code == 201, recovered_replay.text
+    assert recovered_replay.json() == original.json()
+    assert unknown_target_replay.status_code == 409, unknown_target_replay.text
+    assert target_incident_count == 0
 
 
 @pytest.mark.asyncio

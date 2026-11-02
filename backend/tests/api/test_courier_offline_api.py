@@ -274,8 +274,8 @@ def test_offline_migration_is_additive_after_stage_f_integrity() -> None:
 
     assert head_revision is not None
     assert offline_revision is not None
-    assert head_revision.revision == "0010_notifications"
-    assert head_revision.down_revision == "0009_stage_g_offline"
+    assert head_revision.revision == "0011_http_request_scope"
+    assert head_revision.down_revision == "0010_notifications"
     assert offline_revision.down_revision == "0008_stage_f_integrity"
 
 

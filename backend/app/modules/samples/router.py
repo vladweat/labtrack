@@ -66,6 +66,7 @@ async def create_sample(
         actor_id=principal.user_id,
         operation="samples.create",
         key=idempotency_key,
+        request_context={},
         request_data=request.model_dump(mode="json"),
         action=action,
     )
@@ -141,6 +142,7 @@ async def create_external_reference(
         actor_id=principal.user_id,
         operation=f"samples.{sample_id}.external-references.create",
         key=idempotency_key,
+        request_context={"sample_id": str(sample_id)},
         request_data=request.model_dump(mode="json"),
         action=action,
     )

@@ -280,6 +280,7 @@ async def report_container_issue(
         actor_id=principal.user_id,
         operation="shipment.container_issue.report",
         key=idempotency_key,
+        request_context={"shipment_id": str(shipment_id)},
         request_data=payload.model_dump(mode="json"),
         action=action,
         audit_details={"shipment_id": str(shipment_id), "container_id": str(payload.container_id)},
@@ -410,6 +411,10 @@ async def propose_container_issue_resolution(
         actor_id=principal.user_id,
         operation="shipment.container_issue.proposal.create",
         key=idempotency_key,
+        request_context={
+            "shipment_id": str(shipment_id),
+            "issue_id": str(issue_id),
+        },
         request_data=payload.model_dump(mode="json"),
         action=action,
         audit_details={"shipment_id": str(shipment_id), "issue_id": str(issue_id)},
@@ -540,6 +545,11 @@ async def decide_container_issue_resolution(
         actor_id=principal.user_id,
         operation="shipment.container_issue.proposal.decide",
         key=idempotency_key,
+        request_context={
+            "shipment_id": str(shipment_id),
+            "issue_id": str(issue_id),
+            "proposal_id": str(proposal_id),
+        },
         request_data=payload.model_dump(mode="json"),
         action=action,
         audit_details={
@@ -602,6 +612,11 @@ async def withdraw_container_issue_proposal(
         actor_id=principal.user_id,
         operation="shipment.container_issue.proposal.withdraw",
         key=idempotency_key,
+        request_context={
+            "shipment_id": str(shipment_id),
+            "issue_id": str(issue_id),
+            "proposal_id": str(proposal_id),
+        },
         request_data=payload.model_dump(mode="json"),
         action=action,
         audit_details={

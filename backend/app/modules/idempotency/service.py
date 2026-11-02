@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -23,6 +23,7 @@ async def execute_idempotently(
     actor_id: UUID,
     operation: str,
     key: str | None,
+    request_context: Mapping[str, str] | None = None,
     request_data: Any,
     action: Callable[[], Awaitable[tuple[int, dict[str, Any]]]],
     audit_details: dict[str, Any] | None = None,
@@ -37,6 +38,7 @@ async def execute_idempotently(
     body_hash = hashlib.sha256(
         json.dumps(request_data, sort_keys=True, separators=(",", ":"), default=str).encode()
     ).hexdigest()
+    scope = dict(request_context or {})
     await session.execute(
         insert(IdempotencyRecord)
         .values(
@@ -44,6 +46,7 @@ async def execute_idempotently(
             operation=operation,
             key=key,
             request_hash=body_hash,
+            request_context=scope,
         )
         .on_conflict_do_nothing(index_elements=["actor_user_id", "operation", "key"])
     )
@@ -57,7 +60,7 @@ async def execute_idempotently(
         .with_for_update()
     )
     assert record is not None
-    if record.request_hash != body_hash:
+    if record.request_hash != body_hash or record.request_context != scope:
         await session.rollback()
         raise HTTPException(
             status_code=409, detail="Idempotency-Key was already used with another request"
@@ -77,7 +80,7 @@ async def execute_idempotently(
                 request_key=key,
                 request_hash=body_hash,
                 resource_id=(str(body.get("id") or body.get("handoff", {}).get("id", "")) or None),
-                details=audit_details,
+                details={**(audit_details or {}), **scope} or None,
             )
         )
         await session.commit()

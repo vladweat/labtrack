@@ -514,6 +514,7 @@ async def test_pickup_requires_complete_codes_different_actor_and_withdrawal_bef
         )
         assert withdrawal_audit is not None
         assert withdrawal_audit.details == {
+            "shipment_id": shipment_id,
             "reason": "Courier did not arrive",
             "physical_release_occurred": False,
             "containers_remain_at_origin": True,

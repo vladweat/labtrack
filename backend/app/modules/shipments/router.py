@@ -1,5 +1,6 @@
 """Draft shipment and sealed-manifest endpoints."""
 
+from collections.abc import Mapping
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -149,13 +150,23 @@ async def manifest_dict(session: AsyncSession, row: Shipment) -> dict:
 
 
 async def mutate(
-    session, principal, operation, key, payload, action, response, *, audit_details=None
+    session,
+    principal,
+    operation,
+    key,
+    payload,
+    action,
+    response,
+    *,
+    request_context: Mapping[str, str],
+    audit_details=None,
 ):
     code, body = await execute_idempotently(
         session,
         actor_id=principal.user_id,
         operation=operation,
         key=key,
+        request_context=request_context,
         request_data=payload,
         action=action,
         audit_details=audit_details,
@@ -260,6 +271,7 @@ async def create_shipment(
         request.model_dump(mode="json"),
         action,
         response,
+        request_context={},
     )
     return ShipmentResponse.model_validate(body)
 
@@ -348,6 +360,7 @@ async def update_draft(
             request.model_dump(mode="json"),
             action,
             response,
+            request_context={"shipment_id": str(shipment_id)},
         )
     )
 
@@ -392,6 +405,7 @@ async def assign_courier(
             request.model_dump(mode="json"),
             action,
             response,
+            request_context={"shipment_id": str(shipment_id)},
         )
     )
 
@@ -434,6 +448,7 @@ async def add_container(
             {},
             action,
             response,
+            request_context={"shipment_id": str(shipment_id)},
         )
     )
 
@@ -473,6 +488,10 @@ async def delete_container(
         {},
         action,
         response,
+        request_context={
+            "shipment_id": str(shipment_id),
+            "container_id": str(container_id),
+        },
     )
     return Response(status_code=204)
 
@@ -539,6 +558,10 @@ async def add_sample(
             request.model_dump(mode="json"),
             action,
             response,
+            request_context={
+                "shipment_id": str(shipment_id),
+                "container_id": str(container_id),
+            },
         )
     )
 
@@ -581,6 +604,11 @@ async def remove_sample(
         {},
         action,
         response,
+        request_context={
+            "shipment_id": str(shipment_id),
+            "container_id": str(container_id),
+            "item_id": str(item_id),
+        },
     )
     return Response(status_code=204)
 
@@ -644,6 +672,7 @@ async def seal(
             {},
             action,
             response,
+            request_context={"shipment_id": str(shipment_id)},
         )
     )
 
@@ -712,6 +741,7 @@ async def confirm_pickup_release(
             request.model_dump(mode="json"),
             action,
             response,
+            request_context={"shipment_id": str(shipment_id)},
         )
     )
 
@@ -751,6 +781,7 @@ async def confirm_pickup(
             request.model_dump(mode="json"),
             action,
             response,
+            request_context={"shipment_id": str(shipment_id)},
         )
     )
 
@@ -818,6 +849,7 @@ async def withdraw_pickup(
             request.model_dump(mode="json"),
             action,
             response,
+            request_context={"shipment_id": str(shipment_id)},
             audit_details={
                 "reason": request.reason,
                 "physical_release_occurred": False,
@@ -868,6 +900,10 @@ async def courier_initiate_container_delivery(
             request.model_dump(mode="json"),
             action,
             response,
+            request_context={
+                "shipment_id": str(shipment_id),
+                "container_id": str(container_id),
+            },
         )
     )
 
@@ -990,6 +1026,10 @@ async def lab_confirm_container_receipt(
             request.model_dump(mode="json"),
             action,
             response,
+            request_context={
+                "shipment_id": str(shipment_id),
+                "container_id": str(container_id),
+            },
         )
     )
 
@@ -1075,6 +1115,10 @@ async def courier_withdraw_container_delivery(
             request.model_dump(mode="json"),
             action,
             response,
+            request_context={
+                "shipment_id": str(shipment_id),
+                "container_id": str(container_id),
+            },
             audit_details={"reason": request.reason},
         )
     )
@@ -1186,6 +1230,7 @@ async def cancel_shipment(
             request.model_dump(mode="json"),
             action,
             response,
+            request_context={"shipment_id": str(shipment_id)},
             audit_details={"reason": request.reason},
         )
     )

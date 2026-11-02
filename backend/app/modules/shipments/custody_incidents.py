@@ -246,6 +246,7 @@ async def create_custody_incident(
         actor_id=principal.user_id,
         operation="shipment.custody_incident.create",
         key=idempotency_key,
+        request_context={"shipment_id": str(shipment_id)},
         request_data=payload.model_dump(mode="json"),
         action=action,
         audit_details={"shipment_id": str(shipment_id), "phase": payload.phase},
@@ -393,6 +394,10 @@ async def attest_custody_incident(
         actor_id=principal.user_id,
         operation="shipment.custody_incident.attest",
         key=idempotency_key,
+        request_context={
+            "shipment_id": str(shipment_id),
+            "incident_id": str(incident_id),
+        },
         request_data=payload.model_dump(mode="json"),
         action=action,
         audit_details={"shipment_id": str(shipment_id), "incident_id": str(incident_id)},
@@ -484,6 +489,10 @@ async def start_exceptional_container_receipt(
         actor_id=principal.user_id,
         operation="shipment.container.exceptional_receipt.start",
         key=idempotency_key,
+        request_context={
+            "shipment_id": str(shipment_id),
+            "container_id": str(container_id),
+        },
         request_data={"container_id": str(container_id), **payload.model_dump(mode="json")},
         action=action,
         audit_details={"shipment_id": str(shipment_id), "container_id": str(container_id)},
@@ -762,6 +771,10 @@ async def resolve_custody_incident(
         actor_id=principal.user_id,
         operation="shipment.custody_incident.resolve",
         key=idempotency_key,
+        request_context={
+            "shipment_id": str(shipment_id),
+            "incident_id": str(incident_id),
+        },
         request_data=payload.model_dump(mode="json"),
         action=action,
         audit_details={

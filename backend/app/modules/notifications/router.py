@@ -94,6 +94,7 @@ async def mark_notification_read_route(
         actor_id=principal.user_id,
         operation="notifications.read",
         key=idempotency_key,
+        request_context={"notification_id": str(notification_id)},
         request_data={"notification_id": str(notification_id)},
         action=action,
     )
