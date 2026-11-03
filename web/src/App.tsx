@@ -10,6 +10,7 @@ import {
 import { CommandQueue } from './CommandQueue';
 import { NotificationInbox } from './NotificationInbox';
 import { OperationsDashboard } from './OperationsDashboard';
+import { LabWorkspace } from './LabWorkspace';
 import { SenderWorkspace } from './SenderWorkspace';
 import {
   addCommand,
@@ -34,7 +35,7 @@ import type {
 } from './types';
 import { deriveOperationsCapabilities } from './types';
 
-type Workspace = 'courier' | 'operations' | 'sender' | 'inbox';
+type Workspace = 'courier' | 'operations' | 'sender' | 'lab' | 'inbox';
 
 type InboxCountResult =
   | { requestKey: string; count: number }
@@ -407,17 +408,22 @@ function App() {
     setInboxCountResult(null);
     setInboxCountRefresh((value) => value + 1);
     const capabilities = deriveOperationsCapabilities(authenticatedUser);
+    const hasLabMembership = authenticatedUser.memberships.some(
+      (membership) => membership.role === 'LAB_OPERATOR' || membership.role === 'LAB_MANAGER',
+    );
     const canSendShipments = authenticatedUser.memberships.some(
       (membership) => membership.role === 'SENDER_OPERATOR',
     );
     setWorkspace(
       capabilities.canUseCourier
         ? 'courier'
-        : canSendShipments
-          ? 'sender'
-          : capabilities.canViewCases || capabilities.canViewAnalytics
-          ? 'operations'
-          : 'inbox',
+        : hasLabMembership
+          ? 'lab'
+          : canSendShipments
+            ? 'sender'
+            : capabilities.canViewCases || capabilities.canViewAnalytics
+              ? 'operations'
+              : 'inbox',
     );
     setLoginError('');
     setPageError('');
@@ -821,26 +827,36 @@ function App() {
   const hasSenderWorkspace = Boolean(
     user?.memberships.some((membership) => membership.role === 'SENDER_OPERATOR'),
   );
+  const hasLabWorkspace = Boolean(
+    user?.memberships.some((membership) =>
+      membership.role === 'LAB_OPERATOR' || membership.role === 'LAB_MANAGER',
+    ),
+  );
   const hasOperationsWorkspace = Boolean(
     capabilities?.canViewCases || capabilities?.canViewAnalytics,
   );
   const hasMultipleWorkspaces = Boolean(
     Number(capabilities?.canUseCourier ?? false) +
       Number(hasSenderWorkspace) +
+      Number(hasLabWorkspace) +
       Number(hasOperationsWorkspace) > 1,
   );
   const inboxReturnWorkspace: Workspace | null = capabilities?.canUseCourier
     ? 'courier'
-    : hasSenderWorkspace
-      ? 'sender'
-    : hasOperationsWorkspace
-      ? 'operations'
-      : null;
+    : hasLabWorkspace
+      ? 'lab'
+      : hasSenderWorkspace
+        ? 'sender'
+        : hasOperationsWorkspace
+          ? 'operations'
+          : null;
   const inboxReturnLabel = inboxReturnWorkspace === 'courier'
     ? 'Курьер'
-    : inboxReturnWorkspace === 'sender'
-      ? 'Отправитель'
-      : inboxReturnWorkspace === 'operations'
+    : inboxReturnWorkspace === 'lab'
+      ? 'Лаборатория'
+      : inboxReturnWorkspace === 'sender'
+        ? 'Отправитель'
+        : inboxReturnWorkspace === 'operations'
         ? 'Операции'
         : '';
 
@@ -855,9 +871,11 @@ function App() {
           className="brand"
           href="/"
           aria-label={
-            user && workspace === 'sender'
-              ? 'LabTrack, рабочая область отправителя'
-              : user && workspace === 'operations'
+            user && workspace === 'lab'
+              ? 'LabTrack, рабочая область лаборатории'
+              : user && workspace === 'sender'
+                ? 'LabTrack, рабочая область отправителя'
+                : user && workspace === 'operations'
                 ? 'LabTrack, операционная панель'
                 : user && workspace === 'inbox'
                   ? 'LabTrack, входящие уведомления'
@@ -867,13 +885,15 @@ function App() {
           <span className="brand-mark" aria-hidden="true">L</span>
           <span>
             LabTrack <strong>
-              {user && workspace === 'sender'
-                ? 'Отправитель'
-                : user && workspace === 'operations'
-                  ? 'Операции'
-                  : user && workspace === 'inbox'
-                    ? 'Входящие'
-                    : 'Courier'}
+              {user && workspace === 'lab'
+                ? 'Лаборатория'
+                : user && workspace === 'sender'
+                  ? 'Отправитель'
+                  : user && workspace === 'operations'
+                    ? 'Операции'
+                    : user && workspace === 'inbox'
+                      ? 'Входящие'
+                      : 'Courier'}
             </strong>
           </span>
         </a>
@@ -925,6 +945,16 @@ function App() {
                 type="button"
               >
                 Курьер
+              </button>
+            )}
+            {hasLabWorkspace && (
+              <button
+                aria-pressed={workspace === 'lab'}
+                className={`workspace-nav-button ${workspace === 'lab' ? 'is-current' : ''}`}
+                onClick={() => setWorkspace('lab')}
+                type="button"
+              >
+                Лаборатория
               </button>
             )}
             {hasSenderWorkspace && (
@@ -995,6 +1025,17 @@ function App() {
               <OperationsDashboard
                 key={user.id}
                 onUnauthorized={handleDashboardUnauthorized}
+                token={accessToken}
+                user={user}
+              />
+            )}
+
+            {workspace === 'lab' && hasLabWorkspace && accessToken && (
+              <LabWorkspace
+                key={user.id}
+                isSessionCurrent={isSessionCurrent}
+                onUnauthorized={handleDashboardUnauthorized}
+                sessionSignal={sessionController.signal}
                 token={accessToken}
                 user={user}
               />

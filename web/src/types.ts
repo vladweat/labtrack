@@ -113,6 +113,105 @@ export type TransportContainer = {
   receipt_evidence: Record<string, unknown> | null;
 };
 
+export type ReceiptResult = 'ACCEPTED' | 'MISSING' | 'REJECTED';
+
+export type ShipmentManifestItem = {
+  id: string;
+  sample_id: string;
+  sample_code: string;
+  material_type: string;
+  receipt_result: ReceiptResult | null;
+  receipt_reason_code: string | null;
+  receipt_comment: string | null;
+};
+
+export type ShipmentManifestContainer = {
+  id: string;
+  code: string;
+  delivery_status: string;
+  items: ShipmentManifestItem[];
+  receipt_evidence_method: string | null;
+};
+
+export type ShipmentManifest = {
+  shipment_id: string;
+  status: ShipmentStatus;
+  sealed_at: string | null;
+  manifest_revision: number;
+  containers: ShipmentManifestContainer[];
+};
+
+export type PagedShipment = {
+  items: Shipment[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type IssueReason = {
+  id: string;
+  code: string;
+  scope: 'SAMPLE' | 'CONTAINER';
+  kind: 'MISSING' | 'REJECTED';
+  label: string;
+  is_active: boolean;
+};
+
+export type PagedIssueReason = {
+  items: IssueReason[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type ReceivingSession = {
+  id: string;
+  shipment_id: string;
+  sequence: number;
+  status: 'OPEN' | 'CLOSED';
+  opened_by: string;
+  opened_at: string;
+  reopen_reason: string | null;
+  closed_by: string | null;
+  closed_at: string | null;
+};
+
+export type ReceiptRevision = {
+  id: string;
+  receiving_session_id: string;
+  container_item_id: string;
+  old_result: ReceiptResult | null;
+  new_result: ReceiptResult;
+  old_reason_code: string | null;
+  new_reason_code: string | null;
+  old_comment: string | null;
+  new_comment: string | null;
+  changed_by: string;
+  changed_at: string;
+};
+
+export type ReceivingHistory = {
+  sessions: ReceivingSession[];
+  revisions: ReceiptRevision[];
+  total_revisions: number;
+  limit: number;
+  offset: number;
+};
+
+export type ContainerReceiptResult = {
+  id: string;
+  container_id: string;
+  sample_id: string;
+  receipt_result: ReceiptResult;
+  receipt_recorded_at: string;
+  receipt_reason_code: string | null;
+  receipt_comment: string | null;
+};
+
+export type RecordSampleResultRequest =
+  | { result: 'ACCEPTED'; reason_code?: null; comment?: null }
+  | { result: 'MISSING' | 'REJECTED'; reason_code: string; comment?: string | null };
+
 export type Handoff = {
   id: string;
   kind: 'PICKUP' | 'DELIVERY';

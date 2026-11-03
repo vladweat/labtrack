@@ -2,13 +2,19 @@ import type {
   AccessTokenResponse,
   AnalyticsGranularity,
   CurrentUser,
+  ContainerReceiptResult,
   CreateSampleRequest,
   HandoffActionResult,
   Notification,
   PagedOrganization,
   PagedOrganizationCourier,
+  PagedIssueReason,
+  PagedShipment,
   PagedSample,
   Sample,
+  ShipmentManifest,
+  ReceivingHistory,
+  RecordSampleResultRequest,
   OfflineCommand,
   OfflineManifest,
   NotificationUnreadCount,
@@ -215,6 +221,107 @@ export function releaseShipmentPickup(
     token,
     method: 'POST',
     body: { container_codes: containerCodes },
+    idempotencyKey,
+    signal,
+  });
+}
+
+export function listShipments(
+  token: string,
+  signal?: AbortSignal,
+): Promise<PagedShipment> {
+  return request('/shipments?limit=100&offset=0', { token, signal });
+}
+
+export function getShipmentManifest(
+  token: string,
+  shipmentId: string,
+  signal?: AbortSignal,
+): Promise<ShipmentManifest> {
+  return request(`/shipments/${encodeURIComponent(shipmentId)}/manifest`, { token, signal });
+}
+
+export function listIssueReasons(
+  token: string,
+  signal?: AbortSignal,
+): Promise<PagedIssueReason> {
+  return request('/issue-reasons?limit=100&offset=0', { token, signal });
+}
+
+export function confirmLabContainerReceipt(
+  token: string,
+  shipmentId: string,
+  containerId: string,
+  containerCode: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<HandoffActionResult> {
+  return request(
+    `/shipments/${encodeURIComponent(shipmentId)}/containers/${encodeURIComponent(containerId)}/handoffs/delivery/confirm-receipt`,
+    {
+      token,
+      method: 'POST',
+      body: { container_code: containerCode },
+      idempotencyKey,
+      signal,
+    },
+  );
+}
+
+export function recordSampleResult(
+  token: string,
+  shipmentId: string,
+  itemId: string,
+  body: RecordSampleResultRequest,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<ContainerReceiptResult> {
+  return request(
+    `/shipments/${encodeURIComponent(shipmentId)}/receiving/items/${encodeURIComponent(itemId)}`,
+    { token, method: 'PATCH', body, idempotencyKey, signal },
+  );
+}
+
+export function getReceivingHistory(
+  token: string,
+  shipmentId: string,
+  signal?: AbortSignal,
+  pagination: { limit?: number; offset?: number } = {},
+): Promise<ReceivingHistory> {
+  const limit = pagination.limit ?? 100;
+  const offset = pagination.offset ?? 0;
+  return request(
+    `/shipments/${encodeURIComponent(shipmentId)}/receiving/history?limit=${limit}&offset=${offset}`,
+    { token, signal },
+  );
+}
+
+export function completeReceiving(
+  token: string,
+  shipmentId: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<Shipment> {
+  return request(`/shipments/${encodeURIComponent(shipmentId)}/receiving/complete`, {
+    token,
+    method: 'POST',
+    body: {},
+    idempotencyKey,
+    signal,
+  });
+}
+
+export function reopenReceiving(
+  token: string,
+  shipmentId: string,
+  reason: string,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+): Promise<Shipment> {
+  return request(`/shipments/${encodeURIComponent(shipmentId)}/receiving/reopen`, {
+    token,
+    method: 'POST',
+    body: { reason },
     idempotencyKey,
     signal,
   });

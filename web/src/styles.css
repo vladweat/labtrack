@@ -1887,3 +1887,125 @@ textarea:focus {
     text-align: center;
   }
 }
+
+.lab-workspace {
+  display: grid;
+  gap: 22px;
+}
+
+.lab-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.72fr) minmax(0, 1.8fr);
+  align-items: start;
+  gap: 18px;
+}
+
+.lab-detail-column,
+.lab-container-list,
+.lab-container-card,
+.lab-item-list {
+  display: grid;
+  gap: 14px;
+}
+
+.lab-panel {
+  min-width: 0;
+  padding: 22px;
+}
+
+.lab-shipment-list,
+.lab-item-list,
+.lab-history-list {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lab-shipment-select {
+  display: flex;
+  width: 100%;
+  min-height: 54px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line, #d9e1e8);
+  border-radius: 10px;
+  background: #fff;
+  padding: 11px 13px;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.lab-shipment-select.is-selected {
+  border-color: var(--accent, #237a67);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #237a67) 18%, transparent);
+}
+
+.lab-shipment-select span,
+.lab-item-summary span,
+.lab-history-list span {
+  color: var(--muted, #5f6f7e);
+  font-size: 0.9rem;
+}
+
+.lab-container-card,
+.lab-item-card,
+.lab-history-list li {
+  min-width: 0;
+  border: 1px solid var(--line, #d9e1e8);
+  border-radius: 12px;
+  background: #fff;
+  padding: 16px;
+}
+
+.lab-item-card,
+.lab-history-list li {
+  display: grid;
+  gap: 8px;
+}
+
+.lab-item-summary {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.lab-receipt-form,
+.lab-result-form,
+.lab-reopen-form {
+  margin-top: 14px;
+}
+
+.lab-item-list {
+  margin-top: 14px;
+}
+
+.lab-item-list label,
+.lab-receipt-form label,
+.lab-reopen-form label {
+  font-weight: 650;
+}
+
+.lab-item-card textarea,
+.lab-reopen-form textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+
+.lab-complete-button {
+  margin-top: 18px;
+}
+
+@media (max-width: 860px) {
+  .lab-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .lab-panel {
+    padding: 17px;
+  }
+}
