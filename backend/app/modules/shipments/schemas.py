@@ -401,6 +401,8 @@ class ShipmentResponse(BaseModel):
 
 
 class PagedShipmentResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     items: list[ShipmentResponse]
     total: int
     limit: int

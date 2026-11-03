@@ -276,21 +276,49 @@ async def create_shipment(
     return ShipmentResponse.model_validate(body)
 
 
-@router.get("", response_model=PagedShipmentResponse)
+@router.get(
+    "",
+    response_model=PagedShipmentResponse,
+    operation_id="listShipments",
+    summary="List Shipments",
+    description=(
+        "Sender Operators and Lab Managers retain their existing organization visibility. Lab "
+        "Operators see Shipments only when their grant matches the destination organization. "
+        "Assigned Couriers see their own Shipments in an active Courier region."
+    ),
+    responses={
+        200: {
+            "headers": {
+                "X-Request-ID": {
+                    "description": "Correlates server logs and audit events",
+                    "schema": {"type": "string", "format": "uuid"},
+                }
+            }
+        },
+        401: API_ERROR_RESPONSES[401],
+    },
+)
 async def list_shipments(
     principal: Annotated[Principal, Depends(get_current_principal)],
     session: Annotated[AsyncSession, Depends(get_db_session)],
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
-    org_ids = {
+    sender_and_manager_org_ids = {
         grant.organization_id
         for grant in principal.memberships
         if grant.organization_id is not None and grant.role in {"SENDER_OPERATOR", "LAB_MANAGER"}
     }
+    lab_destination_org_ids = {
+        grant.organization_id
+        for grant in principal.memberships
+        if grant.organization_id is not None and grant.role == "LAB_OPERATOR"
+    }
     query = select(Shipment).where(
-        Shipment.sender_organization_id.in_(org_ids)
-        | Shipment.destination_organization_id.in_(org_ids)
+        Shipment.sender_organization_id.in_(sender_and_manager_org_ids)
+        | Shipment.destination_organization_id.in_(
+            sender_and_manager_org_ids | lab_destination_org_ids
+        )
         | (
             (Shipment.courier_user_id == principal.user_id)
             & (
