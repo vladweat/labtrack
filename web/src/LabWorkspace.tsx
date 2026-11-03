@@ -273,6 +273,7 @@ export function LabWorkspace({
   }
 
   function selectShipment(shipmentId: string): void {
+    if (shipmentId === selectedShipmentId) return;
     loadSequence.current += 1;
     setHistoryLoading(false);
     setSelectedShipmentId(shipmentId);
