@@ -22,6 +22,34 @@ def test_production_settings_require_a_non_default_jwt_secret() -> None:
     assert settings.app_env == "production"
 
 
+def test_loopback_database_urls_keep_configured_host_and_port() -> None:
+    settings = Settings(
+        _env_file=None,
+        postgres_host="127.0.0.1",
+        postgres_port=5544,
+    )
+
+    assert settings.database_url.host == "127.0.0.1"
+    assert settings.database_url.port == 5544
+    assert settings.migration_database_url.host == "127.0.0.1"
+    assert settings.migration_database_url.port == 5544
+
+
+def test_unix_socket_database_urls_use_query_host_and_default_port() -> None:
+    settings = Settings(
+        _env_file=None,
+        postgres_host="/tmp/labtrack-postgres-socket",
+        postgres_port=32791,
+    )
+
+    assert settings.database_url.host is None
+    assert settings.database_url.port == 5432
+    assert settings.database_url.query["host"] == "/tmp/labtrack-postgres-socket"
+    assert settings.migration_database_url.host is None
+    assert settings.migration_database_url.port == 5432
+    assert settings.migration_database_url.query["host"] == "/tmp/labtrack-postgres-socket"
+
+
 def test_json_logs_include_request_correlation_without_credentials() -> None:
     request_id = f"req-{uuid4()}"
     context_token = request_id_var.set(request_id)

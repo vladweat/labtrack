@@ -39,6 +39,15 @@ def test_provision_user_parser_requires_one_scope_and_accepts_no_password_argume
         )
 
 
+def test_local_role_fixture_command_has_no_credential_arguments() -> None:
+    args = cli.build_parser().parse_args(["provision-local-roles"])
+    assert args.command == "provision-local-roles"
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(
+            ["provision-local-roles", "--password", "must-not-be-an-argument"]
+        )
+
+
 def test_password_prompt_confirms_password_without_echoing(monkeypatch) -> None:
     prompts: list[str] = []
     passwords = iter(["a sufficiently long password", "a sufficiently long password"])

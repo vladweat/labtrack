@@ -3,13 +3,22 @@
 import argparse
 import asyncio
 import getpass
+import os
 import sys
 from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
+from app.core.config import get_settings
 from app.db.session import dispose_engine, get_session_factory
 from app.modules.idempotency.service import compact_offline_replays
+from app.modules.identity.local_role_fixtures import (
+    LocalRoleProvisioningSummary,
+    LocalRoleSpec,
+    ensure_local_role_fixtures,
+    load_local_role_specs,
+    validate_local_role_target,
+)
 from app.modules.identity.provisioning import (
     ALL_ROLES,
     ProvisioningError,
@@ -33,9 +42,24 @@ def build_parser() -> argparse.ArgumentParser:
     grant.add_argument("--role", required=True, choices=sorted(ALL_ROLES))
     _add_scope_arguments(grant)
     commands.add_parser(
+        "provision-local-roles",
+        help="ensure local Stage I role fixtures from explicitly enabled environment variables",
+    )
+    commands.add_parser(
         "compact-offline-replays", help="compact Courier replay detail older than 90 days"
     )
     return parser
+
+
+async def _execute_local_role_fixtures(
+    specs: tuple[LocalRoleSpec, ...],
+) -> LocalRoleProvisioningSummary:
+    try:
+        async with get_session_factory()() as session:
+            async with session.begin():
+                return await ensure_local_role_fixtures(session, specs)
+    finally:
+        await dispose_engine()
 
 
 def _add_scope_arguments(parser: argparse.ArgumentParser) -> None:
@@ -90,8 +114,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        password = _prompt_password() if args.command == "provision-user" else None
-        resource_id = asyncio.run(_execute(args, password))
+        if args.command == "provision-local-roles":
+            validate_local_role_target(get_settings(), os.environ)
+            specs = load_local_role_specs(os.environ)
+            summary = asyncio.run(_execute_local_role_fixtures(specs))
+        else:
+            password = _prompt_password() if args.command == "provision-user" else None
+            resource_id = asyncio.run(_execute(args, password))
     except ProvisioningError as error:
         print(f"Provisioning failed: {error}", file=sys.stderr)
         return 2
@@ -103,6 +132,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.command == "provision-user":
         print(f"User provisioned: {args.email.strip().casefold()} (id={resource_id})")
+    elif args.command == "provision-local-roles":
+        print(
+            "Local role fixtures ensured: "
+            f"{summary.total} accounts (created={summary.created}, "
+            f"updated={summary.updated}, unchanged={summary.unchanged})."
+        )
     elif args.command == "compact-offline-replays":
         print(f"Offline replay details compacted: {resource_id}")
     else:

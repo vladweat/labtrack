@@ -56,10 +56,28 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> URL:
-        return URL.create(
-            "postgresql+asyncpg",
+        return self._postgres_url(
             username=self.app_postgres_user,
             password=self.app_postgres_password.get_secret_value(),
+        )
+
+    def _postgres_url(self, *, username: str, password: str) -> URL:
+        """Build a TCP URL or a libpq-style Unix-socket query URL."""
+
+        if self.postgres_host.startswith("/"):
+            return URL.create(
+                "postgresql+asyncpg",
+                username=username,
+                password=password,
+                host=None,
+                port=5432,
+                database=self.postgres_db,
+                query={"host": self.postgres_host},
+            )
+        return URL.create(
+            "postgresql+asyncpg",
+            username=username,
+            password=password,
             host=self.postgres_host,
             port=self.postgres_port,
             database=self.postgres_db,
@@ -68,13 +86,9 @@ class Settings(BaseSettings):
     @property
     def migration_database_url(self) -> URL:
         """Database owner connection used only for migrations and test cleanup."""
-        return URL.create(
-            "postgresql+asyncpg",
+        return self._postgres_url(
             username=self.postgres_user,
             password=self.postgres_password.get_secret_value(),
-            host=self.postgres_host,
-            port=self.postgres_port,
-            database=self.postgres_db,
         )
 
 
