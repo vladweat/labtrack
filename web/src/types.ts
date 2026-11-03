@@ -17,6 +17,128 @@ export type CurrentUser = {
   memberships: CourierMembership[];
 };
 
+export type Organization = {
+  id: string;
+  region_id: string;
+  code: string;
+  name: string;
+  kind: string;
+  is_active: boolean;
+};
+
+export type PagedOrganization = {
+  items: Organization[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type OrganizationCourier = {
+  id: string;
+  display_name: string;
+};
+
+export type PagedOrganizationCourier = {
+  items: OrganizationCourier[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type Sample = {
+  id: string;
+  code: string;
+  origin_organization_id: string;
+  material_type: 'BLOOD' | 'URINE' | 'OTHER';
+  collected_at: string | null;
+  created_at: string;
+};
+
+export type PagedSample = {
+  items: Sample[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+export type CreateSampleRequest = {
+  origin_organization_id: string;
+  material_type: Sample['material_type'];
+  collected_at?: string | null;
+};
+
+export type ShipmentStatus =
+  | 'DRAFT'
+  | 'READY_FOR_PICKUP'
+  | 'PICKUP_PENDING'
+  | 'IN_TRANSIT'
+  | 'DELIVERY_PENDING'
+  | 'DELIVERY_BLOCKED'
+  | 'PARTIALLY_DELIVERED'
+  | 'RECEIVING'
+  | 'COMPLETED'
+  | 'COMPLETED_WITH_ISSUES'
+  | 'CANCELLED'
+  | 'CLOSED_UNDELIVERED';
+
+export type Shipment = {
+  id: string;
+  code: string;
+  region_id: string;
+  sender_org_id: string;
+  destination_org_id: string;
+  courier_user_id: string | null;
+  status: ShipmentStatus;
+  version: number;
+  manifest_revision: number;
+  expected_delivery_at: string | null;
+  sealed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  closed_at: string | null;
+  closed_by: string | null;
+  closure_reason: string | null;
+};
+
+export type TransportContainer = {
+  id: string;
+  code: string;
+  shipment_id: string;
+  created_at: string;
+  delivery_status: string;
+  received_at: string | null;
+  received_by: string | null;
+  state_version: number;
+  receipt_evidence: Record<string, unknown> | null;
+};
+
+export type Handoff = {
+  id: string;
+  kind: 'PICKUP' | 'DELIVERY';
+  attempt_no: number;
+  status: 'PENDING' | 'CONFIRMED' | 'WITHDRAWN' | 'SUPERSEDED';
+  initiated_by: string;
+  initiated_at: string;
+  confirmed_by: string | null;
+  confirmed_at: string | null;
+  withdrawn_at: string | null;
+  withdrawn_by: string | null;
+  withdrawal_reason: string | null;
+  container_id: string | null;
+  superseded_by_incident_id: string | null;
+  superseded_at: string | null;
+};
+
+export type HandoffActionResult = {
+  shipment_id: string;
+  shipment_status: ShipmentStatus;
+  version: number;
+  handoff: Handoff;
+  container_id: string | null;
+  container_status: string | null;
+};
+
 export type ShipmentCaseType =
   | 'PICKUP_PENDING'
   | 'DELIVERY_PENDING'

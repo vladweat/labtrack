@@ -111,18 +111,30 @@ export async function setActiveUserId(userId: string | null): Promise<void> {
   });
 }
 
+async function requireActiveUser(
+  transaction: IDBTransaction,
+  expectedUserId: string,
+): Promise<void> {
+  const activeUser = await requestValue<MetaRecord | undefined>(
+    transaction.objectStore('meta').get(ACTIVE_USER_KEY),
+  );
+  if (activeUser?.userId !== expectedUserId) {
+    throw new Error('The active account changed; the local write was rejected.');
+  }
+}
+
 export async function purgeUserData(userId: string, nextUserId: string | null = null): Promise<void> {
-  await runTransaction([...STORE_NAMES], 'readwrite', (transaction) => {
+  await runTransaction([...STORE_NAMES], 'readwrite', async (transaction) => {
+    const meta = transaction.objectStore('meta');
+    const activeUser = await requestValue<MetaRecord | undefined>(meta.get(ACTIVE_USER_KEY));
+    if (activeUser?.userId !== userId) {
+      throw new Error('The active account changed; local data was not purged.');
+    }
+
     for (const storeName of ['snapshots', 'commands', 'command-states', 'outcomes']) {
       scheduleUserDeletion(transaction, storeName, userId);
     }
-    const meta = transaction.objectStore('meta');
-    const request = meta.get(ACTIVE_USER_KEY) as IDBRequest<MetaRecord | undefined>;
-    request.onsuccess = () => {
-      if (request.result?.userId === userId) {
-        meta.put({ key: ACTIVE_USER_KEY, userId: nextUserId } satisfies MetaRecord);
-      }
-    };
+    meta.put({ key: ACTIVE_USER_KEY, userId: nextUserId } satisfies MetaRecord);
   });
 }
 
@@ -133,7 +145,8 @@ export async function saveSnapshot(userId: string, snapshot: OfflineManifest): P
     snapshot,
     savedAt: new Date().toISOString(),
   };
-  await runTransaction(['snapshots'], 'readwrite', (transaction) => {
+  await runTransaction(['snapshots', 'meta'], 'readwrite', async (transaction) => {
+    await requireActiveUser(transaction, userId);
     transaction.objectStore('snapshots').put(record);
   });
 }
@@ -156,7 +169,8 @@ export async function addCommand(userId: string, command: OfflineCommand): Promi
     state: 'PENDING_SYNC',
     updatedAt: new Date().toISOString(),
   };
-  await runTransaction(['commands', 'command-states'], 'readwrite', (transaction) => {
+  await runTransaction(['commands', 'command-states', 'meta'], 'readwrite', async (transaction) => {
+    await requireActiveUser(transaction, userId);
     transaction.objectStore('commands').add(record);
     transaction.objectStore('command-states').add(state);
   });
@@ -171,7 +185,8 @@ export async function saveOutcome(userId: string, result: SyncResult): Promise<v
     result,
     savedAt: new Date().toISOString(),
   };
-  await runTransaction(['outcomes'], 'readwrite', (transaction) => {
+  await runTransaction(['outcomes', 'meta'], 'readwrite', async (transaction) => {
+    await requireActiveUser(transaction, userId);
     transaction.objectStore('outcomes').put(record);
   });
 }
@@ -182,7 +197,8 @@ export async function setCommandState(
   state: CommandState,
 ): Promise<void> {
   const id = recordId(userId, commandId);
-  await runTransaction(['command-states'], 'readwrite', async (transaction) => {
+  await runTransaction(['command-states', 'meta'], 'readwrite', async (transaction) => {
+    await requireActiveUser(transaction, userId);
     const store = transaction.objectStore('command-states');
     const current = await requestValue<StoredCommandState | undefined>(store.get(id));
     if (!current) throw new Error('The queued command status is missing from local storage.');

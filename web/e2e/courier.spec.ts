@@ -23,6 +23,8 @@ type MockOptions = {
   oldSnapshot?: boolean;
   reviewOnSync?: boolean;
   dropFirstSyncResponse?: boolean;
+  holdManifestResponse?: boolean;
+  holdSyncResponse?: boolean;
 };
 
 function manifest(oldSnapshot = false) {
@@ -55,6 +57,16 @@ async function installApiMock(page: Page, options: MockOptions = {}) {
   const authMeRequests: Array<{ token: string; cacheControl: string | null }> = [];
   let serverStatus = 'READY_FOR_PICKUP';
   let dropped = false;
+  let resolveManifestRequestStarted = () => {};
+  let releaseHeldManifest: (() => void) | null = null;
+  let resolveSyncRequestStarted = () => {};
+  let releaseHeldSync: (() => void) | null = null;
+  const manifestRequestStarted = new Promise<void>((resolve) => {
+    resolveManifestRequestStarted = resolve;
+  });
+  const syncRequestStarted = new Promise<void>((resolve) => {
+    resolveSyncRequestStarted = resolve;
+  });
 
   await page.route('**/api/v1/**', async (route: Route) => {
     const request = route.request();
@@ -100,6 +112,12 @@ async function installApiMock(page: Page, options: MockOptions = {}) {
     }
 
     if (url.pathname === `/api/v1/courier/shipments/${shipmentId}/offline-manifest`) {
+      if (options.holdManifestResponse) {
+        resolveManifestRequestStarted();
+        await new Promise<void>((resolve) => {
+          releaseHeldManifest = resolve;
+        });
+      }
       await route.fulfill({ json: manifest(options.oldSnapshot) });
       return;
     }
@@ -109,6 +127,12 @@ async function installApiMock(page: Page, options: MockOptions = {}) {
       const commands = structuredClone(body.commands);
       syncRequests.push(commands);
       syncAuthTokens.push(request.headers().authorization ?? '');
+      if (options.holdSyncResponse) {
+        resolveSyncRequestStarted();
+        await new Promise<void>((resolve) => {
+          releaseHeldSync = resolve;
+        });
+      }
 
       if (options.dropFirstSyncResponse && !dropped) {
         dropped = true;
@@ -157,6 +181,14 @@ async function installApiMock(page: Page, options: MockOptions = {}) {
     syncRequests,
     syncAuthTokens,
     authMeRequests,
+    manifestRequestStarted,
+    syncRequestStarted,
+    releaseManifestResponse() {
+      releaseHeldManifest?.();
+    },
+    releaseSyncResponse() {
+      releaseHeldSync?.();
+    },
     get serverStatus() {
       return serverStatus;
     },
@@ -202,6 +234,19 @@ async function queuePickup(page: Page) {
   await expect(page.getByText(/Local pending/).first()).toBeVisible();
 }
 
+async function switchAccount(page: Page) {
+  await page.getByRole('button', { name: 'Switch account' }).click();
+  const accountLogin = page.getByRole('dialog');
+  await accountLogin.getByLabel('New account email').fill(secondUser.email);
+  await accountLogin.getByLabel('New account password').fill('test-password');
+  await accountLogin.getByRole('button', { name: 'Continue to account' }).click();
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'Switch account and clear local data' })
+    .click();
+  await expect(page.getByRole('heading', { name: 'Welcome, Courier B' })).toBeVisible();
+}
+
 async function inspectDatabase(page: Page) {
   return page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -228,6 +273,25 @@ async function inspectDatabase(page: Page) {
       db.close();
     }
   });
+}
+
+async function changeActiveUserMarker(page: Page, userId: string | null) {
+  await page.evaluate(async (nextUserId) => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('labtrack-courier-v1');
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result);
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(['meta'], 'readwrite');
+      transaction.objectStore('meta').put({ key: 'active-user', userId: nextUserId });
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+      transaction.onabort = () => reject(transaction.error);
+    });
+    database.close();
+  }, userId);
 }
 
 test('loads the cached PWA shell offline and never caches API responses', async ({
@@ -616,4 +680,141 @@ test('keeps queues separate between browser installations on one device', async 
     await firstPage.context().close();
     await secondPage.context().close();
   }
+});
+
+for (const useStorageFallback of [false, true]) {
+  test(
+    `invalidates a sibling tab after account switch${useStorageFallback ? ' using storage fallback' : ''}`,
+    async ({ browser }) => {
+      const context = await browser.newContext();
+      if (useStorageFallback) {
+        await context.addInitScript(() => {
+          Object.defineProperty(window, 'BroadcastChannel', { configurable: true, value: undefined });
+        });
+      }
+      const firstPage = await context.newPage();
+      const secondPage = await context.newPage();
+      const firstMock = await installApiMock(firstPage);
+      const secondMock = await installApiMock(secondPage);
+      try {
+        await firstPage.goto('http://127.0.0.1:4173/');
+        await secondPage.goto('http://127.0.0.1:4173/');
+        await signIn(firstPage, primaryUser.email);
+        await signIn(secondPage, primaryUser.email);
+        await loadShipment(secondPage);
+        await queuePickup(secondPage);
+
+        await switchAccount(firstPage);
+
+        await expect(secondPage.getByRole('button', { name: 'Sign in' })).toBeVisible();
+        await expect(secondPage.getByRole('heading', { name: 'Welcome, Courier A' })).toHaveCount(0);
+        await expect(
+          secondPage.getByRole('button', { name: 'Sync pending commands' }),
+        ).toHaveCount(0);
+        await expect(
+          secondPage.getByRole('button', { name: 'Queue Pickup confirmation' }),
+        ).toHaveCount(0);
+        expect(firstMock.syncRequests).toHaveLength(0);
+        expect(secondMock.syncRequests).toHaveLength(0);
+        const records = await inspectDatabase(secondPage);
+        expect(records.commands).toHaveLength(0);
+        expect(records.snapshots).toHaveLength(0);
+      } finally {
+        await context.close();
+      }
+    },
+  );
+}
+
+test('rejects a queued command after the shared active account changed', async ({ page }) => {
+  await installApiMock(page);
+  await page.goto('/');
+  await signIn(page, primaryUser.email);
+  await loadShipment(page);
+
+  // Model another tab switching the shared IndexedDB account before this stale tab writes.
+  await changeActiveUserMarker(page, secondUser.id);
+  await page.getByLabel('Confirm all sealed container codes').fill(codes.join(', '));
+  await page.getByRole('button', { name: 'Queue Pickup confirmation' }).click();
+
+  expect((await inspectDatabase(page)).commands).toHaveLength(0);
+  await expect(page.locator('.page-alert')).toContainText(/active account changed/i);
+});
+
+test('does not persist a Shipment snapshot returned after the active account changed', async ({ page }) => {
+  const mock = await installApiMock(page, { holdManifestResponse: true });
+  await page.goto('/');
+  await signIn(page, primaryUser.email);
+
+  await page.getByLabel('Shipment ID').fill(shipmentId);
+  const loadButton = page.locator('.load-form button');
+  const loadRequest = loadButton.click();
+  await mock.manifestRequestStarted;
+  await expect(loadButton).toBeDisabled();
+  await changeActiveUserMarker(page, secondUser.id);
+  mock.releaseManifestResponse();
+  await loadRequest;
+  await expect(loadButton).toBeEnabled();
+
+  expect((await inspectDatabase(page)).snapshots).toHaveLength(0);
+});
+
+test('does not persist sync outcomes returned after the active account changed', async ({ page }) => {
+  const mock = await installApiMock(page, { holdSyncResponse: true });
+  await page.goto('/');
+  await signIn(page, primaryUser.email);
+  await loadShipment(page);
+  await queuePickup(page);
+
+  await page.getByRole('button', { name: 'Sync pending commands' }).click();
+  await mock.syncRequestStarted;
+  await changeActiveUserMarker(page, secondUser.id);
+  mock.releaseSyncResponse();
+  await expect(page.getByRole('button', { name: 'Sync pending commands' })).toBeEnabled();
+
+  const records = await inspectDatabase(page);
+  expect(mock.syncRequests).toHaveLength(1);
+  expect(records.outcomes).toHaveLength(0);
+  expect(records['command-states']).toHaveLength(1);
+  expect(records['command-states'][0]).toMatchObject({ state: 'PENDING_SYNC' });
+});
+
+test('does not start synchronization when the shared active account no longer matches the tab', async ({
+  page,
+}) => {
+  const mock = await installApiMock(page);
+  await page.goto('/');
+  await signIn(page, primaryUser.email);
+  await loadShipment(page);
+  await queuePickup(page);
+
+  await changeActiveUserMarker(page, secondUser.id);
+  await page.getByRole('button', { name: 'Sync pending commands' }).click();
+  await expect(page.getByRole('button', { name: 'Sync pending commands' })).toBeEnabled();
+
+  expect(mock.syncRequests).toHaveLength(0);
+  const records = await inspectDatabase(page);
+  expect(records.outcomes).toHaveLength(0);
+  expect(records['command-states'][0]).toMatchObject({ state: 'PENDING_SYNC' });
+});
+
+test('does not purge a previous account after another tab already changed the active account', async ({
+  page,
+}) => {
+  await installApiMock(page);
+  await page.goto('/');
+  await signIn(page, primaryUser.email);
+  await loadShipment(page);
+  await queuePickup(page);
+  await page.getByRole('button', { name: 'Switch account' }).click();
+  await page.getByLabel('New account email').fill(secondUser.email);
+  await page.getByLabel('New account password').fill('test-password');
+  await page.getByRole('button', { name: 'Continue to account' }).click();
+
+  await changeActiveUserMarker(page, secondUser.id);
+  const confirmation = page.getByRole('dialog');
+  await confirmation.getByRole('button', { name: 'Switch account and clear local data' }).click();
+
+  await expect(confirmation).toContainText(/could not clear.*current account and queue are still active/i);
+  expect((await inspectDatabase(page)).commands).toHaveLength(1);
 });

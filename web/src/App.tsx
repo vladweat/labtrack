@@ -10,6 +10,7 @@ import {
 import { CommandQueue } from './CommandQueue';
 import { NotificationInbox } from './NotificationInbox';
 import { OperationsDashboard } from './OperationsDashboard';
+import { SenderWorkspace } from './SenderWorkspace';
 import {
   addCommand,
   getActiveUserId,
@@ -21,6 +22,7 @@ import {
   setActiveUserId,
   setCommandState,
 } from './storage';
+import { publishSessionChange, subscribeToSessionChanges } from './sessionSync';
 import { applySyncResult } from './sync';
 import type {
   CurrentUser,
@@ -32,7 +34,7 @@ import type {
 } from './types';
 import { deriveOperationsCapabilities } from './types';
 
-type Workspace = 'courier' | 'operations' | 'inbox';
+type Workspace = 'courier' | 'operations' | 'sender' | 'inbox';
 
 type InboxCountResult =
   | { requestKey: string; count: number }
@@ -289,6 +291,8 @@ function SwitchAccountPrompt({
 
 function App() {
   const tokenRef = useRef<string | null>(null);
+  const sessionUserIdRef = useRef<string | null>(null);
+  const [sessionController, setSessionController] = useState(() => new AbortController());
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [workspace, setWorkspace] = useState<Workspace>('courier');
@@ -308,6 +312,35 @@ function App() {
   const [inboxCountRefresh, setInboxCountRefresh] = useState(0);
   const [inboxCountResult, setInboxCountResult] = useState<InboxCountResult | null>(null);
 
+  const abortSessionRequests = useCallback(() => {
+    sessionController.abort();
+    setSessionController(new AbortController());
+  }, [sessionController]);
+
+  const isSessionCurrent = useCallback(
+    (userId: string) => sessionUserIdRef.current === userId,
+    [],
+  );
+
+  const clearSession = useCallback(() => {
+    sessionUserIdRef.current = null;
+    abortSessionRequests();
+    tokenRef.current = null;
+    setAccessToken(null);
+    setUser(null);
+    setInboxCountResult(null);
+    setSnapshot(null);
+    setQueue([]);
+    setShipmentId('');
+    setConfirmedCodes('');
+    setSelectedContainerId('');
+    setLinkDelivery(false);
+    setDialog(null);
+    setPageError('');
+    setMessage('');
+    setBusy(false);
+  }, [abortSessionRequests]);
+
   useEffect(() => {
     const updateOnline = () => setIsOnline(navigator.onLine);
     window.addEventListener('online', updateOnline);
@@ -317,6 +350,31 @@ function App() {
       window.removeEventListener('offline', updateOnline);
     };
   }, []);
+
+  useEffect(
+    () =>
+      subscribeToSessionChanges(() => {
+        const expectedUserId = sessionUserIdRef.current;
+        if (!expectedUserId) return;
+        void getActiveUserId()
+          .then((activeUserId) => {
+            if (
+              sessionUserIdRef.current === expectedUserId &&
+              activeUserId !== expectedUserId
+            ) {
+              clearSession();
+              setPageError('Your active account changed in another tab. Sign in again to continue.');
+            }
+          })
+          .catch(() => {
+            if (sessionUserIdRef.current === expectedUserId) {
+              clearSession();
+              setPageError('Your active account could not be confirmed. Sign in again to continue.');
+            }
+          });
+      }),
+    [clearSession],
+  );
 
   const pendingItems = queue.filter((item) => item.state === 'PENDING_SYNC');
   const pendingPickup = queue.find(
@@ -330,17 +388,34 @@ function App() {
     setQueue(await listQueue(userId));
   }
 
+  async function hasActiveAccount(userId: string): Promise<boolean> {
+    if (sessionUserIdRef.current !== userId) return false;
+    try {
+      const activeUserId = await getActiveUserId();
+      return activeUserId === userId && sessionUserIdRef.current === userId;
+    } catch {
+      return false;
+    }
+  }
+
   async function enterSession(authenticatedUser: CurrentUser, token: string) {
+    abortSessionRequests();
+    sessionUserIdRef.current = authenticatedUser.id;
     tokenRef.current = token;
     setAccessToken(token);
     setUser(authenticatedUser);
     setInboxCountResult(null);
     setInboxCountRefresh((value) => value + 1);
     const capabilities = deriveOperationsCapabilities(authenticatedUser);
+    const canSendShipments = authenticatedUser.memberships.some(
+      (membership) => membership.role === 'SENDER_OPERATOR',
+    );
     setWorkspace(
       capabilities.canUseCourier
         ? 'courier'
-        : capabilities.canViewCases || capabilities.canViewAnalytics
+        : canSendShipments
+          ? 'sender'
+          : capabilities.canViewCases || capabilities.canViewAnalytics
           ? 'operations'
           : 'inbox',
     );
@@ -351,6 +426,7 @@ function App() {
       listSnapshots(authenticatedUser.id),
       listQueue(authenticatedUser.id),
     ]);
+    if (!(await hasActiveAccount(authenticatedUser.id))) return;
     const latestSnapshot = snapshots[0]?.snapshot ?? null;
     setSnapshot(latestSnapshot);
     setShipmentId(latestSnapshot?.shipment_id ?? '');
@@ -377,6 +453,7 @@ function App() {
         return;
       }
       await setActiveUserId(authenticatedUser.id);
+      publishSessionChange(authenticatedUser.id);
       await enterSession(authenticatedUser, credentials.access_token);
     } catch (error) {
       setLoginError(errorMessage(error));
@@ -385,29 +462,16 @@ function App() {
     }
   }
 
-  async function clearSession() {
-    tokenRef.current = null;
-    setAccessToken(null);
-    setUser(null);
-    setInboxCountResult(null);
-    setSnapshot(null);
-    setQueue([]);
-    setShipmentId('');
-    setConfirmedCodes('');
-    setSelectedContainerId('');
-    setLinkDelivery(false);
-    setPageError('');
-    setMessage('');
-  }
-
   const handleDashboardUnauthorized = useCallback(() => {
+    sessionUserIdRef.current = null;
+    abortSessionRequests();
     tokenRef.current = null;
     setAccessToken(null);
     setUser(null);
     setInboxCountResult(null);
     setPageError('Срок действия сеанса истёк. Войдите снова; локальная очередь на устройстве сохранена.');
     setMessage('');
-  }, []);
+  }, [abortSessionRequests]);
 
   const inboxCountRequestKey = user && accessToken
     ? JSON.stringify([user.id, accessToken, inboxCountRefresh, isOnline])
@@ -489,6 +553,7 @@ function App() {
           });
           return;
         }
+        publishSessionChange(dialog.targetUser.id);
         setDialog(null);
         await enterSession(dialog.targetUser, dialog.targetToken);
       } else {
@@ -501,6 +566,7 @@ function App() {
           });
           return;
         }
+        publishSessionChange(null);
         setDialog(null);
         await clearSession();
       }
@@ -543,19 +609,27 @@ function App() {
     event.preventDefault();
     const token = tokenRef.current;
     if (!user || !token) return;
+    const userId = user.id;
+    const signal = sessionController.signal;
     setBusy(true);
     setPageError('');
     setMessage('');
     try {
-      const loadedSnapshot = await offlineManifest(shipmentId.trim(), token);
-      await saveSnapshot(user.id, loadedSnapshot);
+      if (!(await hasActiveAccount(userId))) return;
+      const loadedSnapshot = await offlineManifest(shipmentId.trim(), token, signal);
+      if (signal.aborted || !(await hasActiveAccount(userId))) return;
+      await saveSnapshot(userId, loadedSnapshot);
+      if (signal.aborted || sessionUserIdRef.current !== userId) return;
       setSnapshot(loadedSnapshot);
       setSelectedContainerId(loadedSnapshot.containers[0]?.id ?? '');
       setConfirmedCodes('');
       setLinkDelivery(false);
       setMessage('The assigned Shipment snapshot is saved on this device.');
     } catch (error) {
+      if (signal.aborted || sessionUserIdRef.current !== userId) return;
       if (error instanceof ApiError && error.status === 401) {
+        sessionUserIdRef.current = null;
+        abortSessionRequests();
         tokenRef.current = null;
         setAccessToken(null);
         setUser(null);
@@ -569,15 +643,19 @@ function App() {
   }
 
   async function saveCommand(command: OfflineCommand) {
-    if (!user) return;
+    if (!user || sessionUserIdRef.current !== user.id) return;
+    const userId = user.id;
     setBusy(true);
     setPageError('');
     setMessage('');
     try {
-      await addCommand(user.id, command);
-      await refreshQueue(user.id);
+      await addCommand(userId, command);
+      if (sessionUserIdRef.current !== userId) return;
+      await refreshQueue(userId);
+      if (sessionUserIdRef.current !== userId) return;
       setMessage('Saved on this device as local pending. Server custody is unchanged until synchronization.');
     } catch (error) {
+      if (sessionUserIdRef.current !== userId) return;
       setPageError(`The command was not queued. ${errorMessage(error)}`);
     } finally {
       setBusy(false);
@@ -644,7 +722,9 @@ function App() {
 
   async function handleSync() {
     const token = tokenRef.current;
-    if (!user || !token) return;
+    if (!user || !token || sessionUserIdRef.current !== user.id) return;
+    const userId = user.id;
+    const signal = sessionController.signal;
     if (!navigator.onLine) {
       setMessage('You are offline. Commands remain local pending and have not changed server custody.');
       return;
@@ -654,22 +734,28 @@ function App() {
     setPageError('');
     setMessage('Sending saved commands to the server…');
     try {
-      const pending = (await listQueue(user.id)).filter((item) => item.state === 'PENDING_SYNC');
+      const pending = (await listQueue(userId)).filter((item) => item.state === 'PENDING_SYNC');
+      if (signal.aborted || !(await hasActiveAccount(userId))) return;
       if (pending.length === 0) {
         setMessage('There are no pending commands to synchronize.');
         return;
       }
 
       for (let offset = 0; offset < pending.length; offset += 20) {
+        if (signal.aborted || !(await hasActiveAccount(userId))) return;
         const batch = pending.slice(offset, offset + 20);
         let response: { results: Awaited<ReturnType<typeof syncCommands>>['results'] };
         try {
           response = await syncCommands(
             batch.map((item) => item.record.command),
             token,
+            signal,
           );
         } catch (error) {
+          if (signal.aborted || sessionUserIdRef.current !== userId) return;
           if (error instanceof ApiError && error.status === 401) {
+            sessionUserIdRef.current = null;
+            abortSessionRequests();
             tokenRef.current = null;
             setAccessToken(null);
             setUser(null);
@@ -681,20 +767,24 @@ function App() {
           }
           return;
         }
+        if (signal.aborted || !(await hasActiveAccount(userId))) return;
 
         const batchIds = new Set(batch.map((item) => item.record.command.client_command_id));
         for (const result of response.results) {
           if (!batchIds.has(result.client_command_id)) continue;
           await applySyncResult(result, {
-            saveOutcome: (savedResult) => saveOutcome(user.id, savedResult),
-            setCommandState: (commandId, state) => setCommandState(user.id, commandId, state),
+            saveOutcome: (savedResult) => saveOutcome(userId, savedResult),
+            setCommandState: (commandId, state) => setCommandState(userId, commandId, state),
           });
-          await refreshQueue(user.id);
+          if (signal.aborted || sessionUserIdRef.current !== userId) return;
+          await refreshQueue(userId);
+          if (signal.aborted || sessionUserIdRef.current !== userId) return;
         }
       }
 
       setMessage('Synchronization finished. Server outcomes are saved on this device.');
     } catch (error) {
+      if (signal.aborted || sessionUserIdRef.current !== userId) return;
       setMessage(
         `A server response could not be saved locally. The command remains pending and can be replayed safely. ${errorMessage(error)}`,
       );
@@ -728,20 +818,31 @@ function App() {
     : false;
   const canQueueDelivery = Boolean(snapshot && (pendingPickup || pickupIsConfirmed));
   const capabilities = user ? deriveOperationsCapabilities(user) : null;
+  const hasSenderWorkspace = Boolean(
+    user?.memberships.some((membership) => membership.role === 'SENDER_OPERATOR'),
+  );
   const hasOperationsWorkspace = Boolean(
     capabilities?.canViewCases || capabilities?.canViewAnalytics,
   );
-  const hasMultipleWorkspaces = Boolean(capabilities?.canUseCourier && hasOperationsWorkspace);
+  const hasMultipleWorkspaces = Boolean(
+    Number(capabilities?.canUseCourier ?? false) +
+      Number(hasSenderWorkspace) +
+      Number(hasOperationsWorkspace) > 1,
+  );
   const inboxReturnWorkspace: Workspace | null = capabilities?.canUseCourier
     ? 'courier'
+    : hasSenderWorkspace
+      ? 'sender'
     : hasOperationsWorkspace
       ? 'operations'
       : null;
   const inboxReturnLabel = inboxReturnWorkspace === 'courier'
     ? 'Курьер'
-    : inboxReturnWorkspace === 'operations'
-      ? 'Операции'
-      : '';
+    : inboxReturnWorkspace === 'sender'
+      ? 'Отправитель'
+      : inboxReturnWorkspace === 'operations'
+        ? 'Операции'
+        : '';
 
   function returnToAvailableWorkspace() {
     if (inboxReturnWorkspace) setWorkspace(inboxReturnWorkspace);
@@ -754,21 +855,25 @@ function App() {
           className="brand"
           href="/"
           aria-label={
-            user && workspace === 'operations'
-              ? 'LabTrack, операционная панель'
-              : user && workspace === 'inbox'
-                ? 'LabTrack, входящие уведомления'
-                : 'LabTrack Courier home'
+            user && workspace === 'sender'
+              ? 'LabTrack, рабочая область отправителя'
+              : user && workspace === 'operations'
+                ? 'LabTrack, операционная панель'
+                : user && workspace === 'inbox'
+                  ? 'LabTrack, входящие уведомления'
+                  : 'LabTrack Courier home'
           }
         >
           <span className="brand-mark" aria-hidden="true">L</span>
           <span>
             LabTrack <strong>
-              {user && workspace === 'operations'
-                ? 'Операции'
-                : user && workspace === 'inbox'
-                  ? 'Входящие'
-                  : 'Courier'}
+              {user && workspace === 'sender'
+                ? 'Отправитель'
+                : user && workspace === 'operations'
+                  ? 'Операции'
+                  : user && workspace === 'inbox'
+                    ? 'Входящие'
+                    : 'Courier'}
             </strong>
           </span>
         </a>
@@ -812,22 +917,36 @@ function App() {
       <main className="page-content">
         {hasMultipleWorkspaces && (
           <nav className="workspace-nav" aria-label="Рабочие области">
-            <button
-              aria-pressed={workspace === 'courier'}
-              className={`workspace-nav-button ${workspace === 'courier' ? 'is-current' : ''}`}
-              onClick={() => setWorkspace('courier')}
-              type="button"
-            >
-              Курьер
-            </button>
-            <button
-              aria-pressed={workspace === 'operations'}
-              className={`workspace-nav-button ${workspace === 'operations' ? 'is-current' : ''}`}
-              onClick={() => setWorkspace('operations')}
-              type="button"
-            >
-              Операции
-            </button>
+            {capabilities?.canUseCourier && (
+              <button
+                aria-pressed={workspace === 'courier'}
+                className={`workspace-nav-button ${workspace === 'courier' ? 'is-current' : ''}`}
+                onClick={() => setWorkspace('courier')}
+                type="button"
+              >
+                Курьер
+              </button>
+            )}
+            {hasSenderWorkspace && (
+              <button
+                aria-pressed={workspace === 'sender'}
+                className={`workspace-nav-button ${workspace === 'sender' ? 'is-current' : ''}`}
+                onClick={() => setWorkspace('sender')}
+                type="button"
+              >
+                Отправитель
+              </button>
+            )}
+            {hasOperationsWorkspace && (
+              <button
+                aria-pressed={workspace === 'operations'}
+                className={`workspace-nav-button ${workspace === 'operations' ? 'is-current' : ''}`}
+                onClick={() => setWorkspace('operations')}
+                type="button"
+              >
+                Операции
+              </button>
+            )}
           </nav>
         )}
 
@@ -876,6 +995,17 @@ function App() {
               <OperationsDashboard
                 key={user.id}
                 onUnauthorized={handleDashboardUnauthorized}
+                token={accessToken}
+                user={user}
+              />
+            )}
+
+            {workspace === 'sender' && hasSenderWorkspace && accessToken && (
+              <SenderWorkspace
+                key={user.id}
+                isSessionCurrent={isSessionCurrent}
+                onUnauthorized={handleDashboardUnauthorized}
+                sessionSignal={sessionController.signal}
                 token={accessToken}
                 user={user}
               />
