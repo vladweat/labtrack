@@ -16,6 +16,7 @@ from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.errors import APIErrorResponse
 from app.core.logging import configure_logging, normalized_request_id, request_id_var
+from app.core.login_rate_limit import LoginAttemptLimiter
 from app.db.session import dispose_engine, get_engine
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+app.state.login_attempt_limiter = LoginAttemptLimiter(
+    limit=settings.login_failed_attempt_limit,
+    window_seconds=settings.login_failed_window_seconds,
+)
 app.include_router(api_router, prefix="/api/v1")
 
 

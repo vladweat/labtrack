@@ -113,6 +113,14 @@ The React/TypeScript/Vite PWA stores per-user snapshots and immutable commands i
 
 Detailed replay compaction is available as `python -m app.cli compact-offline-replays` from `backend/`. No scheduler is installed. Handoff recommendation: Platform Operations should schedule daily execution after deployment; this cadence is proposed and must be configured by operations. Stage G verification and current branch status are in the [roadmap](19-roadmap-v06.md).
 
+### Stage I role-workspace API additions (merged and pushed at `99caae3`)
+
+- `GET /organizations/{organization_id}/couriers` requires an active `SENDER_OPERATOR` grant to that organization and returns only active Couriers in its active region, with stable ordering and pagination. Email addresses are not returned.
+- `GET /shipments` is paginated and role-scoped: Sender Operators and Lab Managers see their organization's shipments, Lab Operators see shipments for their destination organization, and Couriers see their assigned shipments in an active Courier region.
+- HTTP idempotency now includes route resource context as well as the validated request body; an identical key/body targeting another resource cannot replay the first resource's response. Migration `0011_http_request_scope` adds/backfills this context.
+
+These additions support the local Sender and Lab workspaces and were merged and pushed to `main` at `99caae3`. Stage I was not deployed to the public demo. The dedicated real-browser acceptance and role-scope checks are described in the [test plan](25-test-plan-v061.md).
+
 ## 3. Inbox semantics (Q15)
 
 - `GET /notifications?unread_only=true&limit=20&offset=0` returns own notifications (safe event metadata, not patient data). Optional query `unread_only` default false.

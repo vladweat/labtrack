@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     jwt_access_token_minutes: int = 15
     destination_organization_code: str = "CENTRAL_LAB"
     log_level: str = "INFO"
+    login_failed_attempt_limit: int = Field(default=30, gt=0)
+    login_failed_window_seconds: int = Field(default=900, gt=0)
     stalled_pickup_seconds: int = Field(default=4 * 60 * 60, gt=0)
     stalled_delivery_seconds: int = Field(default=4 * 60 * 60, gt=0)
     stalled_proposal_seconds: int = Field(default=24 * 60 * 60, gt=0)

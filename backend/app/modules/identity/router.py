@@ -2,12 +2,13 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
+from app.core.login_rate_limit import LoginAttemptLimiter, get_client_source_ip
 from app.core.security import create_access_token, verify_password
 from app.db.session import get_db_session
 from app.modules.identity.access import Principal, get_current_principal
@@ -25,26 +26,40 @@ router = APIRouter(prefix="/auth", tags=["authentication"])
 @router.post("/token", response_model=AccessTokenResponse)
 async def login(
     request: LoginRequest,
+    http_request: Request,
     session: Annotated[AsyncSession, Depends(get_db_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> AccessTokenResponse:
     """Exchange credentials for a short-lived access token."""
 
-    normalized_email = request.email.strip().casefold()
-    user = await session.scalar(select(User).where(User.email == normalized_email))
-    valid_password = False
-    if user is not None and user.is_active:
-        valid_password = await run_in_threadpool(
-            verify_password,
-            request.password,
-            user.password_hash,
-        )
-    if not valid_password:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid email or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    source_ip = get_client_source_ip(http_request)
+    limiter: LoginAttemptLimiter = http_request.app.state.login_attempt_limiter
+    async with limiter.source_attempt_lock(source_ip):
+        retry_after = limiter.retry_after(source_ip)
+        if retry_after is not None:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many failed login attempts. Try again later.",
+                headers={"Retry-After": str(retry_after)},
+            )
+
+        normalized_email = request.email.strip().casefold()
+        user = await session.scalar(select(User).where(User.email == normalized_email))
+        valid_password = False
+        if user is not None and user.is_active:
+            valid_password = await run_in_threadpool(
+                verify_password,
+                request.password,
+                user.password_hash,
+            )
+        if not valid_password:
+            limiter.record_failure(source_ip)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid email or password",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        limiter.record_success(source_ip)
     token, expires_in = create_access_token(user.id, settings)
     return AccessTokenResponse(access_token=token, expires_in=expires_in)
 

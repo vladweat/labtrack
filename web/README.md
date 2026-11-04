@@ -1,8 +1,9 @@
-# Courier PWA
+# LabTrack web app
 
-This React, TypeScript, and Vite app supports only offline Pickup confirmation
-and one-container Delivery initiation. The API remains the custody authority;
-local pending commands do not change server state.
+This React, TypeScript, and Vite app provides role-specific Sender, Courier,
+Lab, Lab Manager, and Operations workspaces. Courier offline Pickup/Delivery
+commands remain local proposals until accepted by the API; the server is the
+custody authority.
 
 ## Local development
 
@@ -41,7 +42,6 @@ has a separate queue.
 
 The generated service worker precaches static shell assets only. API traffic
 uses `cache: "no-store"` and has no service-worker runtime cache. This app does
-not store patient or Sample fields. The build in `dist/` is static output; Stage
-G does not configure production hosting or deployment. When hosted later, serve
-the static files on the API origin or behind an equivalent same-origin reverse
-proxy so `/api/v1` remains reachable.
+not store patient or Sample fields. The build in `dist/` is static output.
+Public demo hosting is currently stopped; this document does not describe a
+current hosted deployment.
