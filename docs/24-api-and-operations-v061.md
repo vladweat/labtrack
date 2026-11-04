@@ -111,15 +111,22 @@ The sync outcomes are `APPLIED`, `ALREADY_APPLIED`, `REJECTED`, `RETRYABLE`, and
 
 The React/TypeScript/Vite PWA stores per-user snapshots and immutable commands in IndexedDB; access tokens remain in memory, API traffic is network-only, and the service worker caches only shell assets. It reauthenticates after reload, warns and purges the scoped queue on logout/account change, and syncs in the foreground. A locally pending command is not a server custody event. Production hosting is outside Stage G.
 
-Detailed replay compaction is available as `python -m app.cli compact-offline-replays` from `backend/`. No scheduler is installed. Handoff recommendation: Platform Operations should schedule daily execution after deployment; this cadence is proposed and must be configured by operations. Stage G verification and current branch status are in the [roadmap](19-roadmap-v06.md).
-
-### Stage I role-workspace API additions (merged and pushed at `99caae3`)
+### Stage I role-workspace API additions
 
 - `GET /organizations/{organization_id}/couriers` requires an active `SENDER_OPERATOR` grant to that organization and returns only active Couriers in its active region, with stable ordering and pagination. Email addresses are not returned.
 - `GET /shipments` is paginated and role-scoped: Sender Operators and Lab Managers see their organization's shipments, Lab Operators see shipments for their destination organization, and Couriers see their assigned shipments in an active Courier region.
 - HTTP idempotency now includes route resource context as well as the validated request body; an identical key/body targeting another resource cannot replay the first resource's response. Migration `0011_http_request_scope` adds/backfills this context.
 
-These additions support the local Sender and Lab workspaces and were merged and pushed to `main` at `99caae3`. Stage I was not deployed to the public demo. The dedicated real-browser acceptance and role-scope checks are described in the [test plan](25-test-plan-v061.md).
+### Public demo login throttling
+
+The demo's `POST /auth/token` endpoint counts failed authentication attempts by
+source IP: the default limit is 30 failures in 900 seconds, after which the
+response is `429` with `Retry-After`. Successful authentication clears that
+source's failure bucket; there is no account-wide lockout. The limiter is
+process-local in the current single-worker API, so an API restart clears its
+counters and multiple API processes would not share them. Viewers behind one
+NAT share a source-IP bucket. This is a modest guard for shared synthetic
+accounts, not a distributed rate-limit or abuse-prevention service.
 
 ## 3. Inbox semantics (Q15)
 

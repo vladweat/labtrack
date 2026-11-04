@@ -39,7 +39,7 @@ LabTrack — система прослеживаемости передачи л
 ## Статус и границы
 
 **Foundation / Stage A завершён:** typed runtime settings, async SQLAlchemy session, identity/scope schema, явный Alembic migration с проверкой drift, login с Argon2id и коротким identity-only JWT, проверка active memberships и scoped RBAC, `/health/live`, `/health/ready`, JSON request-correlated logs. Команды пользователя и scoped membership доступны оператору из backend CLI; проверки Foundation и Manifest описаны в [backend README](backend/README.md).
-**Stages A–H опубликованы в `main` (`5320784`).** Stage F добавляет receiving/reopen lifecycle с append-only revisions и PostgreSQL guards. Stage G добавляет migration `0009_stage_g_offline`, PHI-free snapshots, per-command replay/tombstones и Courier PWA; его финальная проверка прошла 185 backend tests, migration cycle, OpenAPI/app-role и web checks.
+Stage F добавляет receiving/reopen lifecycle с append-only revisions и PostgreSQL guards. Stage G добавляет migration `0009_stage_g_offline`, PHI-free snapshots, per-command replay/tombstones и Courier PWA; его финальная проверка прошла 185 backend tests, migration cycle, OpenAPI/app-role и web checks.
 
 **Stage H** adds stalled-case/analytics APIs, Inbox/Celery, Operations UI, structured request/worker logs and manual backup/load tooling. The release suite passed 193 backend tests, 11 Chromium E2E tests, web lint/unit/TypeScript/build, Ruff, Alembic drift check and Compose config; isolated browser/API and worker/Beat startup checks did not verify a production image, scheduled task or notification delivery.
 
@@ -67,4 +67,3 @@ docker compose down
 
 ## Backend scaffold
 
-В `backend/` находится модульная структура FastAPI; версия Python — 3.12. Установка, миграция и запуск описаны в [backend/README.md](backend/README.md). Ролевые интерфейсы и локальная приёмка описаны в [web/README.md](web/README.md). Публичное демо остановлено. Используйте только синтетические данные.

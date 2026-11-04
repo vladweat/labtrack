@@ -1,0 +1,42 @@
+name: Public demo browser smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/public-demo-smoke.yml"
+      - "backend/**"
+      - "web/**"
+  workflow_dispatch:
+  schedule:
+    - cron: "23 */6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-demo-browser-smoke
+  cancel-in-progress: true
+
+jobs:
+  browser-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    env:
+      LABTRACK_PUBLIC_DEMO_URL: https://labtrack.wvzl.site
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Check the public synthetic demo from Chromium
+        run: npx playwright test --config playwright.external-demo.config.ts

@@ -40,8 +40,3 @@ user and this browser installation. Logging out or switching accounts warns
 before deleting that user's saved device data. A separate browser installation
 has a separate queue.
 
-The generated service worker precaches static shell assets only. API traffic
-uses `cache: "no-store"` and has no service-worker runtime cache. This app does
-not store patient or Sample fields. The build in `dist/` is static output.
-Public demo hosting is currently stopped; this document does not describe a
-current hosted deployment.

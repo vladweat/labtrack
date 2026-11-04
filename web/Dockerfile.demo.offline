@@ -1,0 +1,10 @@
+FROM labtrack-stagei-caddy@sha256:ae1a04e62a68ead0e758e2ffb4d1bd651fe2b96fc84705d8097045625b163c2c
+
+ARG SOURCE_COMMIT
+
+LABEL org.opencontainers.image.revision="${SOURCE_COMMIT}" \
+      org.labtrack.base-image-id="sha256:ae1a04e62a68ead0e758e2ffb4d1bd651fe2b96fc84705d8097045625b163c2c"
+
+RUN rm -rf /srv && mkdir -p /srv
+
+COPY dist/ /srv/

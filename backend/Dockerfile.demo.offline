@@ -1,0 +1,21 @@
+FROM labtrack-stagei-api@sha256:80caf7750a9a239c75345471f0da81c87f34c042b4952988adb859b8a9461ee6
+
+ARG SOURCE_COMMIT
+
+LABEL org.opencontainers.image.revision="${SOURCE_COMMIT}" \
+      org.labtrack.base-image-id="sha256:80caf7750a9a239c75345471f0da81c87f34c042b4952988adb859b8a9461ee6"
+
+WORKDIR /app
+
+ENV PYTHONPATH=/app \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+USER root
+RUN rm -rf /app/app /app/alembic /app/alembic.ini && mkdir -p /app
+
+COPY --chown=labtrack:labtrack app /app/app
+COPY --chown=labtrack:labtrack alembic /app/alembic
+COPY --chown=labtrack:labtrack alembic.ini /app/alembic.ini
+
+USER labtrack

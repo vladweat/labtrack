@@ -1,7 +1,5 @@
 # LabTrack v0.6.1 — Verification, Test Matrix & Implementation Gates
 
-**Scope:** requirement-level verification plan and implementation gates. Stages A–I are merged and pushed to `main` through `99caae3`. Public demo hosting is stopped and Stage I was not deployed there. Stage I `npm run check` passed lint, 2 unit tests, production build and 28 default E2E tests; fresh isolated browser/API acceptance passed 1/1 through Sender, Courier and Lab actions. The acceptance harness verifies migrations, runtime privileges, role scopes, repeat provisioning, off-origin blocking and redirect refusal. The backend suite passed 208 tests with 0 failures and 3 existing Alembic warnings; focused provisioning tests passed 14/14. Stage H full suite passed 193 tests and isolated runtime/database checks; no live demo backup, migration or deployment occurred. Its 10-second `urllib` route-smoke (565 requests; p50 16.858 ms, p95 29.171 ms) is not official k6, representative capacity evidence, or an SLA. See the [roadmap](19-roadmap-v06.md). Use **real PostgreSQL** for locks, triggers, partial indexes and migration testing.
-
 ## 1. P0 — Chain of custody
 
 | Test | Precondition and expected result |
@@ -76,7 +74,5 @@
 **Offline acceptance (OPEN-04 APPROVED):** manifest revision, target Container/Handoff version, Pickup phase and active authorization are relevant; unrelated Shipment bookkeeping alone is not. The 24-hour snapshot guard, 90-day replay, tombstones, two-device conflicts and explicit same-snapshot Pickup→Delivery dependency are Stage G acceptance requirements.
 
 **Stage G verification boundary:** PostgreSQL backend and Playwright UI suites pass independently. Playwright intercepts `/api/v1/**`; it verifies browser/offline behavior but does not exercise the Vite app against live FastAPI/PostgreSQL. Production hosting and compaction scheduling are outside Stage G.
-
-**Stage I verification boundary:** `web/e2e/local_real_acceptance.spec.ts`, invoked by `npm run test:acceptance:local`, exercises the Sender→Courier→Lab workflow against a fresh disposable PostgreSQL database and local FastAPI/Vite. It deterministically holds the manifest response while reselecting the active Lab shipment to cover the detail-loading race. It also asserts off-origin requests are blocked and redirects are not followed. The suite does not use the public demo; the default mocked Playwright suite excludes this dedicated spec. The runner requires cached local dependencies/images and no network access; it publishes no host ports and cleans its temporary database, socket, credentials, logs and processes. Stage I is merged and pushed to `main` at `99caae3` but was not deployed.
 
 **Scope control:** no new third Sample/Container discrepancy type, no phantom witness signatures, no retrospective custody acceptance from stale commands, no Courier reassignment after seal.
