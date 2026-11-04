@@ -262,6 +262,17 @@ h3 {
   padding: 34px;
 }
 
+.shared-demo-notice {
+  margin: 18px 0 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(126, 157, 136, 0.45);
+  border-radius: 12px;
+  background: #f1f7f1;
+  color: #345247;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
 .login-mark {
   width: 43px;
   height: 43px;

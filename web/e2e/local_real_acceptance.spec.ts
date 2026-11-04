@@ -372,6 +372,32 @@ test('real Sender → Courier → Lab workflow reaches server completion', async
   await expect(page.getByText(`Result saved for ${sampleCode}.`)).toBeVisible();
   await page.getByRole('button', { name: 'Complete receiving' }).click();
   await expect(page.getByTestId('lab-shipment-status')).toHaveText('COMPLETED');
+
+  await signOut(page);
+  await signIn(page, 'LABTRACK_LOCAL_LAB_MANAGER_EMAIL', 'LABTRACK_LOCAL_LAB_MANAGER_PASSWORD');
+  await expect(page.getByRole('heading', { name: 'Lab workspace' })).toBeVisible();
+  const managerShipmentButton = page.getByRole('button', { name: new RegExp(shipmentCode) });
+  await expect(managerShipmentButton).toBeVisible();
+  await managerShipmentButton.click();
+  await expect(page.getByRole('heading', { name: 'Receiving history' })).toBeVisible();
+  await expect(page.getByText('Session 1 · CLOSED')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Reopen receiving' })).toBeVisible();
+  await page.getByLabel('Reopen reason').fill('Synthetic manager review');
+  await page.getByRole('button', { name: 'Reopen receiving' }).click();
+  await expect(page.getByTestId('lab-shipment-status')).toHaveText('RECEIVING');
+  await expect(page.getByText('Session 2 · OPEN')).toBeVisible();
+  await expect(page.getByText('Reopen reason: Synthetic manager review')).toBeVisible();
+
+  await signOut(page);
+  const sharedDemoNotice = page.getByRole('note', { name: 'Shared demo notice' });
+  await expect(sharedDemoNotice).toContainText('Demo accounts and data are shared and synthetic.');
+  const configuredPasswords = Object.entries(process.env)
+    .filter(([name, value]) => name.endsWith('_PASSWORD') && value)
+    .map(([, value]) => value as string);
+  const loginRendersConfiguredPassword = await page.locator('body').innerText().then((text) =>
+    configuredPasswords.some((password) => text.includes(password)));
+  expect(loginRendersConfiguredPassword, 'The login screen must not render configured demo passwords').toBe(false);
+
   await Promise.all(diagnostics.pendingApiFailureDetails);
   expect(diagnostics.apiFailures, 'Unexpected real API responses').toEqual([]);
   expect(diagnostics.failedRequests, 'Failed real API requests').toEqual([]);

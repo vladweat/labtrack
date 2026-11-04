@@ -111,6 +111,9 @@ function LoginForm({
       <p className="muted">
         Your access token stays in memory. After a reload, sign in again to open your saved device queue.
       </p>
+      <aside className="shared-demo-notice" role="note" aria-label="Shared demo notice">
+        Demo accounts and data are shared and synthetic. Other viewers may see or change demo activity.
+      </aside>
       <form className="stack-form" onSubmit={submit}>
         <label htmlFor="email">Email</label>
         <input

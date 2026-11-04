@@ -223,6 +223,8 @@ LABTRACK_LOCAL_COURIER_EMAIL=stage-i-courier-$fixture_tag@example.test
 LABTRACK_LOCAL_COURIER_PASSWORD=$(sed -n 's/^LABTRACK_LOCAL_COURIER_PASSWORD=//p' "$role_env_file")
 LABTRACK_LOCAL_LAB_OPERATOR_EMAIL=stage-i-lab-operator-$fixture_tag@example.test
 LABTRACK_LOCAL_LAB_OPERATOR_PASSWORD=$(sed -n 's/^LABTRACK_LOCAL_LAB_OPERATOR_PASSWORD=//p' "$role_env_file")
+LABTRACK_LOCAL_LAB_MANAGER_EMAIL=$(sed -n 's/^LABTRACK_LOCAL_LAB_MANAGER_EMAIL=//p' "$role_env_file")
+LABTRACK_LOCAL_LAB_MANAGER_PASSWORD=$(sed -n 's/^LABTRACK_LOCAL_LAB_MANAGER_PASSWORD=//p' "$role_env_file")
 EOF
 chmod 600 "$playwright_env_file"
 
