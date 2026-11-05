@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ApiError, listInboxNotifications, markInboxNotificationRead } from './api';
 import type { Notification, PagedNotification } from './types';
+import { safeErrorMessage, shipmentStatusLabel } from './localization';
 
 type InboxProps = {
   token: string;
@@ -24,21 +25,6 @@ const CASE_TYPE_LABELS: Record<string, string> = {
   SHIPMENT_OVERDUE: 'Срок доставки превышен',
 };
 
-const STATUS_LABELS: Record<string, string> = {
-  DRAFT: 'Черновик',
-  READY_FOR_PICKUP: 'Готово к забору',
-  PICKUP_PENDING: 'Ожидает забора',
-  IN_TRANSIT: 'В пути',
-  DELIVERY_PENDING: 'Ожидает доставки',
-  DELIVERY_BLOCKED: 'Доставка заблокирована',
-  PARTIALLY_DELIVERED: 'Доставлено частично',
-  RECEIVING: 'Приёмка',
-  COMPLETED: 'Завершено',
-  COMPLETED_WITH_ISSUES: 'Завершено с проблемами',
-  CANCELLED: 'Отменено',
-  CLOSED_UNDELIVERED: 'Закрыто без доставки',
-};
-
 const DATE_TIME_FORMAT = new Intl.DateTimeFormat('ru-RU', {
   dateStyle: 'medium',
   timeStyle: 'short',
@@ -59,7 +45,7 @@ function caseTypeLabel(caseType: string): string {
 }
 
 function statusLabel(status: string): string {
-  return STATUS_LABELS[status] ?? 'Другой статус';
+  return shipmentStatusLabel(status);
 }
 
 function requestErrorMessage(error: unknown, isOnline: boolean): string {
@@ -67,7 +53,7 @@ function requestErrorMessage(error: unknown, isOnline: boolean): string {
   if (error instanceof TypeError) {
     return 'Не удалось подключиться к серверу. Проверьте соединение и повторите запрос.';
   }
-  return error instanceof Error ? error.message : 'Не удалось выполнить запрос. Повторите попытку.';
+  return safeErrorMessage(error, 'Не удалось выполнить запрос. Проверьте соединение и повторите попытку.');
 }
 
 function markErrorMessage(error: unknown, isOnline: boolean): string {
@@ -79,7 +65,7 @@ function markErrorMessage(error: unknown, isOnline: boolean): string {
     return 'Не удалось связаться с сервером. Повторите попытку, чтобы безопасно проверить результат.';
   }
   return error instanceof Error
-    ? `Не удалось отметить уведомление прочитанным. ${error.message}`
+    ? `Не удалось отметить уведомление прочитанным. ${safeErrorMessage(error, 'Повторите попытку позже.')}`
     : 'Не удалось отметить уведомление прочитанным. Повторите попытку.';
 }
 

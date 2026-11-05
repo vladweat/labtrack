@@ -20,6 +20,7 @@ import type {
   Shipment,
   TransportContainer,
 } from './types';
+import { materialTypeLabel, safeErrorMessage, shipmentStatusLabel } from './localization';
 
 type SenderWorkspaceProps = {
   user: CurrentUser;
@@ -31,18 +32,12 @@ type SenderWorkspaceProps = {
 
 type ContainerDraft = TransportContainer & { sampleCodes: string[]; sampleIds: string[] };
 
-const SHIPMENT_STATUS_LABELS: Record<string, string> = {
-  DRAFT: 'Черновик',
-  READY_FOR_PICKUP: 'Готово к забору',
-  PICKUP_PENDING: 'Ожидает забора',
-};
-
 function messageForError(error: unknown): string {
-  return error instanceof Error ? error.message : 'Не удалось выполнить запрос. Повторите попытку.';
+  return safeErrorMessage(error, 'Не удалось выполнить запрос. Проверьте соединение и повторите попытку.');
 }
 
 function statusLabel(status: string): string {
-  return SHIPMENT_STATUS_LABELS[status] ?? status.replaceAll('_', ' ');
+  return shipmentStatusLabel(status);
 }
 
 function idempotencyKey(): string {
@@ -137,7 +132,7 @@ export function SenderWorkspace({
             : firstSenderLaboratories[0]?.id ?? '',
         );
         if (allowedSenders.length === 0) {
-          setError('No active Sender organization is assigned to this account.');
+          setError('Для этой учётной записи не назначена активная организация отправителя.');
         }
       })
       .catch((cause: unknown) => {
@@ -233,7 +228,7 @@ export function SenderWorkspace({
         ],
       }));
       setSampleToAdd(sample.id);
-      setMessage(`Sample ${sample.code} was created by the server.`);
+      setMessage(`Образец ${sample.code} создан.`);
     } catch (cause) {
       if (requestIsCurrent(userId, signal)) handleError(cause);
     } finally {
@@ -261,7 +256,7 @@ export function SenderWorkspace({
       completeOperation(operation);
       setShipment(created);
       setContainers([]);
-      setMessage(`Shipment ${created.code} was created. Current server status: ${statusLabel(created.status)}.`);
+      setMessage(`Отправка ${created.code} создана. Текущий статус: ${statusLabel(created.status)}.`);
     } catch (cause) {
       if (requestIsCurrent(userId, signal)) handleError(cause);
     } finally {
@@ -284,7 +279,7 @@ export function SenderWorkspace({
       if (!requestIsCurrent(userId, signal)) return;
       completeOperation(operation);
       setShipment(updated);
-      setMessage(`Courier assigned. Current server status: ${statusLabel(updated.status)}.`);
+      setMessage(`Курьер назначен. Текущий статус отправки: ${statusLabel(updated.status)}.`);
     } catch (cause) {
       if (requestIsCurrent(userId, signal)) handleError(cause);
     } finally {
@@ -308,7 +303,7 @@ export function SenderWorkspace({
       const container: ContainerDraft = { ...created, sampleCodes: [], sampleIds: [] };
       setContainers((current) => [...current, container]);
       setSelectedContainerId(container.id);
-      setMessage(`Container ${container.code} was added by the server.`);
+      setMessage(`Контейнер ${container.code} добавлен.`);
     } catch (cause) {
       if (requestIsCurrent(userId, signal)) handleError(cause);
     } finally {
@@ -349,7 +344,7 @@ export function SenderWorkspace({
           : container,
       ));
       setSampleToAdd(availableSamples.find((item) => item.id !== sample.id)?.id ?? '');
-      setMessage(`Sample ${sample.code} was added to ${selectedContainer.code}.`);
+      setMessage(`Образец ${sample.code} добавлен в контейнер ${selectedContainer.code}.`);
     } catch (cause) {
       if (requestIsCurrent(userId, signal)) handleError(cause);
     } finally {
@@ -371,7 +366,7 @@ export function SenderWorkspace({
       if (!requestIsCurrent(userId, signal)) return;
       completeOperation(operation);
       setShipment(updated);
-      setMessage(`Shipment sealed. Current server status: ${statusLabel(updated.status)}.`);
+      setMessage(`Отправка опечатана. Текущий статус: ${statusLabel(updated.status)}.`);
     } catch (cause) {
       if (requestIsCurrent(userId, signal)) handleError(cause);
     } finally {
@@ -397,7 +392,7 @@ export function SenderWorkspace({
         ? { ...current, status: result.shipment_status, version: result.version, updated_at: result.handoff.initiated_at }
         : current,
       );
-      setMessage(`Pickup release recorded. Current server status: ${statusLabel(result.shipment_status)}.`);
+      setMessage(`Забор отправки разрешён. Текущий статус: ${statusLabel(result.shipment_status)}.`);
     } catch (cause) {
       if (requestIsCurrent(userId, signal)) handleError(cause);
     } finally {
@@ -409,20 +404,20 @@ export function SenderWorkspace({
     <div className="sender-workspace">
       <section className="operations-intro" aria-labelledby="sender-workspace-heading">
         <div>
-          <p className="eyebrow">Shipment preparation</p>
-          <h1 id="sender-workspace-heading">Sender workspace</h1>
-          <p className="muted">Create samples and prepare a Shipment. The server validates each action and owns every status transition.</p>
+          <p className="eyebrow">Подготовка отправки</p>
+          <h1 id="sender-workspace-heading">Рабочая область отправителя</h1>
+          <p className="muted">Создавайте образцы и готовьте отправки. Сервер проверяет каждое действие и управляет переходами статусов.</p>
         </div>
         <div className="operations-stamp" aria-hidden="true">S</div>
       </section>
 
       {error && <p className="page-alert" role="alert">{error}</p>}
       {message && <p className="page-message" role="status" aria-live="polite">{message}</p>}
-      {loading && <p role="status">Loading Sender organizations…</p>}
+      {loading && <p role="status">Загружаем организации отправителя…</p>}
 
       {!loading && senderOrganizations.length === 0 && (
         <section className="panel sender-panel">
-          <p className="muted">This account has no active Sender organization available.</p>
+          <p className="muted">Для этой учётной записи нет доступных активных организаций отправителя.</p>
         </section>
       )}
 
@@ -431,11 +426,11 @@ export function SenderWorkspace({
           <section className="panel sender-panel" aria-labelledby="sender-samples-heading">
             <div className="section-heading">
               <div>
-                <p className="eyebrow">Origin organization</p>
-                <h2 id="sender-samples-heading">Samples</h2>
+                <p className="eyebrow">Организация отправителя</p>
+                <h2 id="sender-samples-heading">Образцы</h2>
               </div>
             </div>
-            <label htmlFor="sample-origin-organization">Sample origin organization</label>
+            <label htmlFor="sample-origin-organization">Организация отправителя для образцов</label>
             <select
               id="sample-origin-organization"
               onChange={(event) => handleSenderOrganizationChange(event.target.value)}
@@ -446,29 +441,29 @@ export function SenderWorkspace({
               ))}
             </select>
             <form className="stack-form" onSubmit={createSampleHandler}>
-              <label htmlFor="sample-material-type">Material type</label>
+              <label htmlFor="sample-material-type">Тип материала</label>
               <select
                 id="sample-material-type"
                 onChange={(event) => setMaterialType(event.target.value as Sample['material_type'])}
                 value={materialType}
               >
-                <option value="BLOOD">Blood</option>
-                <option value="URINE">Urine</option>
-                <option value="OTHER">Other</option>
+                <option value="BLOOD">Кровь</option>
+                <option value="URINE">Моча</option>
+                <option value="OTHER">Другое</option>
               </select>
               <button className="button button-primary" disabled={busy || loading} type="submit">
-                {busy ? 'Saving…' : 'Create sample'}
+                {busy ? 'Сохраняем…' : 'Создать образец'}
               </button>
             </form>
 
-            <h3 className="sender-subheading">Available samples</h3>
+            <h3 className="sender-subheading">Доступные образцы</h3>
             {samples.length === 0 ? (
-              <p className="muted">No samples are available for this organization.</p>
+              <p className="muted">В этой организации пока нет образцов.</p>
             ) : (
-              <ul className="sender-resource-list" aria-label="Available samples">
+              <ul className="sender-resource-list" aria-label="Доступные образцы">
                 {samples.map((sample) => (
                   <li key={sample.id}>
-                    <span><strong>{sample.code}</strong><small>{sample.material_type}</small></span>
+                    <span><strong>{sample.code}</strong><small>{materialTypeLabel(sample.material_type)}</small></span>
                   </li>
                 ))}
               </ul>
@@ -478,10 +473,10 @@ export function SenderWorkspace({
           <div className="sender-workflow">
             {!shipment ? (
               <section className="panel sender-panel" aria-labelledby="sender-create-shipment-heading">
-                <p className="eyebrow">New draft</p>
-                <h2 id="sender-create-shipment-heading">Create draft Shipment</h2>
+                <p className="eyebrow">Новая отправка</p>
+                <h2 id="sender-create-shipment-heading">Создать черновик отправки</h2>
                 <form className="stack-form" onSubmit={createShipmentHandler}>
-                  <label htmlFor="shipment-sender-organization">Sender organization</label>
+                  <label htmlFor="shipment-sender-organization">Организация отправителя</label>
                   <select
                     id="shipment-sender-organization"
                     onChange={(event) => handleSenderOrganizationChange(event.target.value)}
@@ -491,20 +486,20 @@ export function SenderWorkspace({
                       <option key={organization.id} value={organization.id}>{organization.name}</option>
                     ))}
                   </select>
-                  <label htmlFor="destination-laboratory">Destination laboratory</label>
+                  <label htmlFor="destination-laboratory">Лаборатория-получатель</label>
                   <select
                     id="destination-laboratory"
                     onChange={(event) => setDestinationOrganizationId(event.target.value)}
                     value={destinationOrganizationId}
                     required
                   >
-                    <option value="" disabled>Select a laboratory</option>
+                    <option value="" disabled>Выберите лабораторию</option>
                     {availableDestinationOrganizations.map((organization) => (
                       <option key={organization.id} value={organization.id}>{organization.name}</option>
                     ))}
                   </select>
-                  <p className="muted">The server confirms whether this is the configured destination laboratory.</p>
-                  <label htmlFor="expected-delivery">Expected delivery</label>
+                  <p className="muted">Сервер проверит, соответствует ли выбранная лаборатория настройкам региона.</p>
+                  <label htmlFor="expected-delivery">Ожидаемая дата доставки</label>
                   <input
                     id="expected-delivery"
                     onChange={(event) => setExpectedDeliveryAt(event.target.value)}
@@ -513,7 +508,7 @@ export function SenderWorkspace({
                     value={expectedDeliveryAt}
                   />
                   <button className="button button-primary" disabled={busy || !destinationOrganizationId} type="submit">
-                    {busy ? 'Creating…' : 'Create draft Shipment'}
+                    {busy ? 'Создаём…' : 'Создать черновик отправки'}
                   </button>
                 </form>
               </section>
@@ -521,8 +516,8 @@ export function SenderWorkspace({
               <section className="panel sender-panel sender-shipment" aria-labelledby="sender-shipment-heading">
                 <div className="section-heading">
                   <div>
-                    <p className="eyebrow">Server record</p>
-                    <h2 id="sender-shipment-heading">Shipment {shipment.code}</h2>
+                    <p className="eyebrow">Запись на сервере</p>
+                    <h2 id="sender-shipment-heading">Отправка {shipment.code}</h2>
                   </div>
                   <span className="status-badge">{statusLabel(shipment.status)}</span>
                 </div>
@@ -531,22 +526,22 @@ export function SenderWorkspace({
                 {shipment.status === 'DRAFT' && (
                   <>
                     <form className="stack-form sender-inline-form" onSubmit={assignCourierHandler}>
-                      <label htmlFor="sender-courier">Courier</label>
+                      <label htmlFor="sender-courier">Курьер</label>
                       <select id="sender-courier" onChange={(event) => setCourierId(event.target.value)} value={courierId} required>
-                        {couriers.length === 0 ? <option value="">No active Couriers available</option> : null}
+                        {couriers.length === 0 ? <option value="">Нет активных курьеров</option> : null}
                         {couriers.map((courier) => <option key={courier.id} value={courier.id}>{courier.display_name}</option>)}
                       </select>
-                      <button className="button button-secondary" disabled={busy || !courierId} type="submit">Assign Courier</button>
+                      <button className="button button-secondary" disabled={busy || !courierId} type="submit">Назначить курьера</button>
                     </form>
 
                     <div className="sender-container-heading">
-                      <h3>Containers</h3>
-                      <button className="button button-secondary" disabled={busy} onClick={addContainerHandler} type="button">Add container</button>
+                      <h3>Контейнеры</h3>
+                      <button className="button button-secondary" disabled={busy} onClick={addContainerHandler} type="button">Добавить контейнер</button>
                     </div>
                     {containers.length === 0 ? (
-                      <p className="muted">Add a container, then assign at least one sample to every container.</p>
+                      <p className="muted">Добавьте контейнер, затем назначьте образцы каждому контейнеру.</p>
                     ) : (
-                      <ul className="sender-resource-list sender-container-list" aria-label="Shipment containers">
+                      <ul className="sender-resource-list sender-container-list" aria-label="Контейнеры отправки">
                         {containers.map((container) => (
                           <li className={container.id === selectedContainerId ? 'is-selected' : ''} key={container.id}>
                             <button
@@ -556,7 +551,7 @@ export function SenderWorkspace({
                               type="button"
                             >
                               <strong>{container.code}</strong>
-                              <span>{container.sampleCodes.length} samples</span>
+                              <span>Образцов: {container.sampleCodes.length}</span>
                             </button>
                             {container.sampleCodes.length > 0 && (
                               <small>{container.sampleCodes.join(', ')}</small>
@@ -568,27 +563,27 @@ export function SenderWorkspace({
 
                     {selectedContainer && availableSamples.length > 0 && (
                       <form className="stack-form sender-inline-form" onSubmit={addSampleHandler}>
-                        <label htmlFor="sample-to-add">Sample to add</label>
+                        <label htmlFor="sample-to-add">Образец для добавления</label>
                         <select id="sample-to-add" onChange={(event) => setSampleToAdd(event.target.value)} value={sampleToAdd}>
-                          {availableSamples.map((sample) => <option key={sample.id} value={sample.id}>{sample.code} · {sample.material_type}</option>)}
+                          {availableSamples.map((sample) => <option key={sample.id} value={sample.id}>{sample.code} · {materialTypeLabel(sample.material_type)}</option>)}
                         </select>
-                        <button className="button button-secondary" disabled={busy} type="submit">Add sample to container</button>
+                        <button className="button button-secondary" disabled={busy} type="submit">Добавить образец в контейнер</button>
                       </form>
                     )}
 
-                    <button className="button button-primary sender-action-button" disabled={busy} onClick={sealShipmentHandler} type="button">Seal Shipment</button>
+                    <button className="button button-primary sender-action-button" disabled={busy} onClick={sealShipmentHandler} type="button">Опечатать отправку</button>
                   </>
                 )}
 
                 {shipment.status === 'READY_FOR_PICKUP' && (
                   <section className="sender-release" aria-labelledby="sender-release-heading">
-                    <p className="eyebrow">Complete manifest confirmation</p>
-                    <h3 id="sender-release-heading">Release Pickup</h3>
-                    <p className="muted">The server will verify the assigned Courier and complete sealed container code set.</p>
-                    <ul className="sender-code-list" aria-label="Sealed container codes">
+                    <p className="eyebrow">Подтверждение полного манифеста</p>
+                    <h3 id="sender-release-heading">Разрешить забор</h3>
+                    <p className="muted">Сервер проверит назначенного курьера и полный набор кодов опечатанных контейнеров.</p>
+                    <ul className="sender-code-list" aria-label="Коды опечатанных контейнеров">
                       {containers.map((container) => <li key={container.id}><code>{container.code}</code></li>)}
                     </ul>
-                    <button className="button button-primary" disabled={busy} onClick={releasePickupHandler} type="button">Release Pickup</button>
+                    <button className="button button-primary" disabled={busy} onClick={releasePickupHandler} type="button">Разрешить забор</button>
                   </section>
                 )}
               </section>

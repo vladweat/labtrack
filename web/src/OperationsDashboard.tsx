@@ -8,6 +8,7 @@ import {
   type ShipmentSummary,
   type StalledShipment,
 } from './types';
+import { safeErrorMessage, shipmentStatusLabel } from './localization';
 
 type OperationsDashboardProps = {
   user: CurrentUser;
@@ -35,21 +36,6 @@ const CASE_TYPE_LABELS: Record<StalledShipment['case_type'], string> = {
   DELIVERY_PENDING: 'Ожидает доставки',
   PROPOSAL_PENDING: 'Ожидает решения по предложению',
   SHIPMENT_OVERDUE: 'Срок доставки превышен',
-};
-
-const SHIPMENT_STATUS_LABELS: Record<string, string> = {
-  DRAFT: 'Черновик',
-  READY_FOR_PICKUP: 'Готово к забору',
-  PICKUP_PENDING: 'Ожидает забора',
-  IN_TRANSIT: 'В пути',
-  DELIVERY_PENDING: 'Ожидает доставки',
-  DELIVERY_BLOCKED: 'Доставка заблокирована',
-  PARTIALLY_DELIVERED: 'Доставлено частично',
-  RECEIVING: 'Приёмка',
-  COMPLETED: 'Завершено',
-  COMPLETED_WITH_ISSUES: 'Завершено с проблемами',
-  CLOSED_UNDELIVERED: 'Закрыто без доставки',
-  CANCELLED: 'Отменено',
 };
 
 const UTC_DATE_FORMAT = new Intl.DateTimeFormat('ru-RU', {
@@ -110,7 +96,7 @@ function formatDuration(seconds: number | null): string {
 }
 
 function statusLabel(status: string): string {
-  return SHIPMENT_STATUS_LABELS[status] ?? `Другой статус (${status})`;
+  return shipmentStatusLabel(status);
 }
 
 function requestErrorMessage(error: unknown, isOnline: boolean): string {
@@ -118,7 +104,7 @@ function requestErrorMessage(error: unknown, isOnline: boolean): string {
   if (error instanceof TypeError) {
     return 'Не удалось подключиться к серверу. Проверьте соединение и повторите запрос.';
   }
-  return error instanceof Error ? error.message : 'Не удалось выполнить запрос. Повторите попытку.';
+  return safeErrorMessage(error, 'Не удалось выполнить запрос. Проверьте соединение и повторите попытку.');
 }
 
 function utcBoundary(date: string): string {

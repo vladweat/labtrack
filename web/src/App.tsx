@@ -25,6 +25,12 @@ import {
 } from './storage';
 import { publishSessionChange, subscribeToSessionChanges } from './sessionSync';
 import { applySyncResult } from './sync';
+import {
+  containerStatusLabel,
+  formatDateTime,
+  safeErrorMessage,
+  shipmentStatusLabel,
+} from './localization';
 import type {
   CurrentUser,
   DeliveryCommand,
@@ -58,7 +64,7 @@ function createCommandId(): string {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : 'The request could not be completed.';
+  return safeErrorMessage(error, 'Не удалось выполнить запрос. Проверьте соединение и повторите попытку.');
 }
 
 function inboxCountFailure(error: unknown, isOnline: boolean): string {
@@ -106,16 +112,16 @@ function LoginForm({
   return (
     <section className="login-card panel" aria-labelledby="sign-in-heading">
       <div className="login-mark" aria-hidden="true">L</div>
-      <p className="eyebrow">Courier workspace</p>
-      <h2 id="sign-in-heading">Sign in to continue</h2>
+      <p className="eyebrow">Рабочая область курьера</p>
+      <h2 id="sign-in-heading">Вход в LabTrack</h2>
       <p className="muted">
-        Your access token stays in memory. After a reload, sign in again to open your saved device queue.
+        Токен доступа хранится только в памяти. После перезагрузки войдите снова, чтобы открыть очередь команд, сохранённую на устройстве.
       </p>
-      <aside className="shared-demo-notice" role="note" aria-label="Shared demo notice">
-        Demo accounts and data are shared and synthetic. Other viewers may see or change demo activity.
+      <aside className="shared-demo-notice" role="note" aria-label="Общее уведомление о демо">
+        Учётные записи и данные демо общие и синтетические. Другие посетители могут видеть действия в демо и менять данные.
       </aside>
       <form className="stack-form" onSubmit={submit}>
-        <label htmlFor="email">Email</label>
+        <label htmlFor="email">Электронная почта</label>
         <input
           autoComplete="username"
           id="email"
@@ -125,7 +131,7 @@ function LoginForm({
           type="email"
           value={email}
         />
-        <label htmlFor="password">Password</label>
+        <label htmlFor="password">Пароль</label>
         <input
           autoComplete="current-password"
           id="password"
@@ -137,7 +143,7 @@ function LoginForm({
         />
         {error && <p role="alert" className="inline-error">{error}</p>}
         <button className="button button-primary" disabled={busy} type="submit">
-          {busy ? 'Signing in…' : 'Sign in'}
+          {busy ? 'Входим…' : 'Войти'}
         </button>
       </form>
     </section>
@@ -157,14 +163,14 @@ function PurgeConfirmation({
 }) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const isAccountChange = dialog.kind === 'account-change';
-  const title = isAccountChange ? 'Switch courier account?' : 'Log out and clear device data?';
+  const title = isAccountChange ? 'Сменить учётную запись курьера?' : 'Выйти и очистить данные устройства?';
   const description = isAccountChange
-    ? `Saved courier data for account ${dialog.previousUserId} will be cleared from this device before switching to ${dialog.targetUser.display_name}. This includes ${dialog.unsyncedCount} unsynced local command${dialog.unsyncedCount === 1 ? '' : 's'}.`
-    : `${dialog.unsyncedCount} unsynced local command${dialog.unsyncedCount === 1 ? '' : 's'} will be permanently deleted, along with this account’s saved offline snapshots on this device.`;
+    ? `Данные курьера для учётной записи ${dialog.previousUserId} будут удалены с этого устройства перед переходом к ${dialog.targetUser.display_name}. Несинхронизированных команд: ${dialog.unsyncedCount}.`
+    : `Будут безвозвратно удалены несинхронизированные команды: ${dialog.unsyncedCount}, а также сохранённые офлайн-снимки этой учётной записи на устройстве.`;
   const confirmLabel =
     dialog.kind === 'logout'
-      ? 'Log out and clear local data'
-      : 'Switch account and clear local data';
+      ? 'Выйти и очистить данные устройства'
+      : 'Сменить учётную запись и очистить данные';
 
   useEffect(() => {
     const element = dialogRef.current;
@@ -185,12 +191,12 @@ function PurgeConfirmation({
         onCancel();
       }}
     >
-      <p className="eyebrow">Device-local queue</p>
+      <p className="eyebrow">Очередь на устройстве</p>
       <h2 id="purge-dialog-title">{title}</h2>
       <p id="purge-dialog-description">{description}</p>
       {dialog.error && <p className="inline-error" role="alert">{dialog.error}</p>}
       <p className="warning-note">
-        Unsynced commands are not on the server and cannot be recovered after they are deleted.
+        Несинхронизированных команд ещё нет на сервере. После удаления восстановить их нельзя.
       </p>
       <div className="dialog-actions">
         <button
@@ -200,7 +206,7 @@ function PurgeConfirmation({
           onClick={onCancel}
           type="button"
         >
-          {isAccountChange ? 'Keep previous account' : 'Cancel'}
+          {isAccountChange ? 'Оставить прежнюю учётную запись' : 'Отмена'}
         </button>
         <button
           className="button button-danger"
@@ -208,7 +214,7 @@ function PurgeConfirmation({
           onClick={() => void onConfirm()}
           type="button"
         >
-          {busy ? 'Clearing…' : confirmLabel}
+          {busy ? 'Очищаем…' : confirmLabel}
         </button>
         </div>
     </dialog>
@@ -254,13 +260,13 @@ function SwitchAccountPrompt({
         onCancel();
       }}
     >
-      <p className="eyebrow">Account change</p>
-      <h2 id="switch-account-title">Sign in to another account</h2>
+      <p className="eyebrow">Смена учётной записи</p>
+      <h2 id="switch-account-title">Войти в другую учётную запись</h2>
       <p id="switch-account-description">
-        Your current Courier session and device queue stay active until you confirm a switch.
+        Текущий сеанс курьера и очередь команд на устройстве останутся активными, пока вы не подтвердите смену.
       </p>
       <form className="stack-form" onSubmit={submit}>
-        <label htmlFor="new-account-email">New account email</label>
+        <label htmlFor="new-account-email">Электронная почта новой учётной записи</label>
         <input
           autoComplete="username"
           autoFocus
@@ -270,7 +276,7 @@ function SwitchAccountPrompt({
           type="email"
           value={email}
         />
-        <label htmlFor="new-account-password">New account password</label>
+        <label htmlFor="new-account-password">Пароль новой учётной записи</label>
         <input
           autoComplete="current-password"
           id="new-account-password"
@@ -282,10 +288,10 @@ function SwitchAccountPrompt({
         {error && <p className="inline-error" role="alert">{error}</p>}
         <div className="dialog-actions">
           <button className="button button-quiet" disabled={busy} onClick={onCancel} type="button">
-            Keep current account
+            Оставить текущую учётную запись
           </button>
           <button className="button button-primary" disabled={busy} type="submit">
-            {busy ? 'Checking account…' : 'Continue to account'}
+            {busy ? 'Проверяем учётную запись…' : 'Продолжить'}
           </button>
         </div>
       </form>
@@ -367,13 +373,13 @@ function App() {
               activeUserId !== expectedUserId
             ) {
               clearSession();
-              setPageError('Your active account changed in another tab. Sign in again to continue.');
+              setPageError('Учётная запись изменилась в другой вкладке. Войдите снова.');
             }
           })
           .catch(() => {
             if (sessionUserIdRef.current === expectedUserId) {
               clearSession();
-              setPageError('Your active account could not be confirmed. Sign in again to continue.');
+              setPageError('Не удалось подтвердить учётную запись. Войдите снова.');
             }
           });
       }),
@@ -558,7 +564,7 @@ function App() {
         } catch (error) {
           setDialog({
             ...dialog,
-            error: `Could not clear this device’s saved data. Your current account and queue are still active. ${errorMessage(error)}`,
+            error: `Не удалось очистить данные на этом устройстве. Текущая учётная запись и очередь остаются активными. ${errorMessage(error)}`,
           });
           return;
         }
@@ -571,7 +577,7 @@ function App() {
         } catch (error) {
           setDialog({
             ...dialog,
-            error: `Could not clear this device’s saved data. You are still signed in and your queue is unchanged. ${errorMessage(error)}`,
+            error: `Не удалось очистить данные на этом устройстве. Вы остались в системе, очередь не изменилась. ${errorMessage(error)}`,
           });
           return;
         }
@@ -580,7 +586,7 @@ function App() {
         await clearSession();
       }
     } catch (error) {
-      setPageError(`The new account could not be loaded after the data switch. ${errorMessage(error)}`);
+      setPageError(`Не удалось загрузить новую учётную запись после смены. ${errorMessage(error)}`);
     } finally {
       setBusy(false);
     }
@@ -595,7 +601,7 @@ function App() {
       const targetUser = await currentUser(credentials.access_token);
       if (targetUser.id === user.id) {
         setDialog(null);
-        setMessage('You are already using this account. Your local queue remains active.');
+        setMessage('Вы уже вошли в эту учётную запись. Очередь на устройстве сохранена.');
         return;
       }
 
@@ -633,7 +639,7 @@ function App() {
       setSelectedContainerId(loadedSnapshot.containers[0]?.id ?? '');
       setConfirmedCodes('');
       setLinkDelivery(false);
-      setMessage('The assigned Shipment snapshot is saved on this device.');
+      setMessage('Снимок назначенной отправки сохранён на этом устройстве.');
     } catch (error) {
       if (signal.aborted || sessionUserIdRef.current !== userId) return;
       if (error instanceof ApiError && error.status === 401) {
@@ -642,7 +648,7 @@ function App() {
         tokenRef.current = null;
         setAccessToken(null);
         setUser(null);
-        setPageError('Your sign-in expired. Sign in again to continue; this account’s local queue is retained.');
+        setPageError('Срок действия сеанса истёк. Войдите снова; очередь этой учётной записи сохранена на устройстве.');
       } else {
         setPageError(errorMessage(error));
       }
@@ -662,10 +668,10 @@ function App() {
       if (sessionUserIdRef.current !== userId) return;
       await refreshQueue(userId);
       if (sessionUserIdRef.current !== userId) return;
-      setMessage('Saved on this device as local pending. Server custody is unchanged until synchronization.');
+      setMessage('Команда сохранена на устройстве и ожидает синхронизации. Статус передачи на сервере не изменился.');
     } catch (error) {
       if (sessionUserIdRef.current !== userId) return;
-      setPageError(`The command was not queued. ${errorMessage(error)}`);
+      setPageError(`Не удалось добавить команду в очередь. ${errorMessage(error)}`);
     } finally {
       setBusy(false);
     }
@@ -675,7 +681,7 @@ function App() {
     event.preventDefault();
     if (!user || !snapshot) return;
     if (!codesMatch(confirmedCodes, snapshot.container_codes)) {
-      setPageError('Enter the complete sealed container code set exactly as shown in the snapshot.');
+      setPageError('Введите все коды опечатанных контейнеров точно так, как они указаны в снимке.');
       return;
     }
     const command: PickupCommand = Object.freeze({
@@ -697,18 +703,18 @@ function App() {
     if (!user || !snapshot) return;
     const selectedContainer = snapshot.containers.find((container) => container.id === selectedContainerId);
     if (!selectedContainer) {
-      setPageError('Choose a container from the assigned Shipment snapshot.');
+      setPageError('Выберите контейнер из снимка назначенной отправки.');
       return;
     }
     const pickupIsConfirmed = ['IN_TRANSIT', 'DELIVERY_PENDING', 'PARTIALLY_DELIVERED'].includes(
       snapshot.status,
     );
     if (pendingPickup && !linkDelivery) {
-      setPageError('Link this Delivery explicitly to the queued Pickup before saving it.');
+      setPageError('Перед сохранением свяжите доставку с ожидающим подтверждением забора.');
       return;
     }
     if (!pickupIsConfirmed && !pendingPickup) {
-      setPageError('Queue and sync a Pickup first, or load a snapshot showing confirmed Pickup.');
+      setPageError('Сначала поставьте забор в очередь и синхронизируйте его либо загрузите снимок с подтверждённым забором.');
       return;
     }
     const command: DeliveryCommand = Object.freeze({
@@ -735,18 +741,18 @@ function App() {
     const userId = user.id;
     const signal = sessionController.signal;
     if (!navigator.onLine) {
-      setMessage('You are offline. Commands remain local pending and have not changed server custody.');
+      setMessage('Нет подключения к сети. Команды остаются на устройстве и не меняют статус передачи на сервере.');
       return;
     }
 
     setBusy(true);
     setPageError('');
-    setMessage('Sending saved commands to the server…');
+    setMessage('Отправляем сохранённые команды на сервер…');
     try {
       const pending = (await listQueue(userId)).filter((item) => item.state === 'PENDING_SYNC');
       if (signal.aborted || !(await hasActiveAccount(userId))) return;
       if (pending.length === 0) {
-        setMessage('There are no pending commands to synchronize.');
+        setMessage('Нет команд, ожидающих синхронизации.');
         return;
       }
 
@@ -768,10 +774,10 @@ function App() {
             tokenRef.current = null;
             setAccessToken(null);
             setUser(null);
-            setPageError('Your sign-in expired. Sign in again; pending commands remain saved for this account.');
+            setPageError('Срок действия сеанса истёк. Войдите снова; ожидающие команды сохранены для этой учётной записи.');
           } else {
             setMessage(
-              'The sync response was not received. Your command is still local pending; retry sends the same command ID and payload.',
+              'Ответ сервера не получен. Команда остаётся на устройстве; повторная отправка использует тот же идентификатор и данные.',
             );
           }
           return;
@@ -791,11 +797,11 @@ function App() {
         }
       }
 
-      setMessage('Synchronization finished. Server outcomes are saved on this device.');
+      setMessage('Синхронизация завершена. Ответы сервера сохранены на этом устройстве.');
     } catch (error) {
       if (signal.aborted || sessionUserIdRef.current !== userId) return;
       setMessage(
-        `A server response could not be saved locally. The command remains pending and can be replayed safely. ${errorMessage(error)}`,
+        `Не удалось сохранить ответ сервера на устройстве. Команда ожидает синхронизации; её можно безопасно отправить повторно. ${errorMessage(error)}`,
       );
     } finally {
       setBusy(false);
@@ -882,7 +888,7 @@ function App() {
                 ? 'LabTrack, операционная панель'
                 : user && workspace === 'inbox'
                   ? 'LabTrack, входящие уведомления'
-                  : 'LabTrack Courier home'
+                  : 'LabTrack, главная страница курьера'
           }
         >
           <span className="brand-mark" aria-hidden="true">L</span>
@@ -896,14 +902,14 @@ function App() {
                     ? 'Операции'
                     : user && workspace === 'inbox'
                       ? 'Входящие'
-                      : 'Courier'}
+                      : 'Курьер'}
             </strong>
           </span>
         </a>
         <div className="topbar-tools">
           <span className={`connection-pill ${isOnline ? 'is-online' : 'is-offline'}`}>
             <span className="connection-dot" aria-hidden="true" />
-            {isOnline ? 'Online' : 'Offline'}
+            {isOnline ? 'В сети' : 'Не в сети'}
           </span>
           {user && (
             <div className="account-tools">
@@ -927,10 +933,10 @@ function App() {
                 </span>
               </button>
               <button className="text-button" onClick={showSwitchConfirmation} type="button">
-                Switch account
+                Сменить учётную запись
               </button>
               <button className="text-button" onClick={showLogoutConfirmation} type="button">
-                Log out
+                Выйти
               </button>
             </div>
           )}
@@ -1000,15 +1006,15 @@ function App() {
         {(!user || workspace === 'courier') && (
           <section className="page-intro" aria-labelledby="page-title">
             <div>
-              <p className="eyebrow">Field operations · device-local queue</p>
-              <h1 id="page-title">Courier Offline</h1>
+              <p className="eyebrow">Работа курьера · очередь команд на устройстве</p>
+              <h1 id="page-title">Курьер офлайн</h1>
               <p className="intro-copy">
-                Confirm Pickup and start a single-container Delivery with a saved Shipment snapshot. Local pending actions are not server custody events.
+                Подтвердите забор и начните доставку отдельного контейнера по сохранённому снимку отправки. Ожидающие команды на устройстве ещё не меняют статус передачи на сервере.
               </p>
             </div>
             <div className="intro-stamp" aria-hidden="true">
               <span>LT</span>
-              <small>Courier</small>
+              <small>Курьер</small>
             </div>
           </section>
         )}
@@ -1072,22 +1078,22 @@ function App() {
             <section className="panel session-panel" aria-labelledby="session-heading">
               <div className="section-heading">
                 <div>
-                  <p className="eyebrow">Authenticated session</p>
-                  <h2 id="session-heading">Welcome, {user.display_name}</h2>
+                  <p className="eyebrow">Активный сеанс</p>
+                  <h2 id="session-heading">Добро пожаловать, {user.display_name}</h2>
                 </div>
-                <p className="token-note">Access token held in memory</p>
+                <p className="token-note">Токен доступа хранится в памяти</p>
               </div>
               <form className="load-form" onSubmit={handleLoadShipment}>
-                <label htmlFor="shipment-id">Shipment ID</label>
+                <label htmlFor="shipment-id">Идентификатор отправки</label>
                 <input
                   id="shipment-id"
                   onChange={(event) => setShipmentId(event.target.value)}
-                  placeholder="Paste an assigned Shipment ID"
+                  placeholder="Введите идентификатор назначенной отправки"
                   required
                   value={shipmentId}
                 />
                 <button className="button button-secondary" disabled={busy || !isOnline} type="submit">
-                  {busy ? 'Loading…' : 'Load assigned Shipment'}
+                  {busy ? 'Загружаем…' : 'Загрузить назначенную отправку'}
                 </button>
               </form>
             </section>
@@ -1098,42 +1104,42 @@ function App() {
                   <section className="panel snapshot-panel" aria-labelledby="snapshot-heading">
                     <div className="section-heading">
                       <div>
-                        <p className="eyebrow">Server-issued offline snapshot</p>
-                        <h2 id="snapshot-heading">Assigned Shipment</h2>
+                        <p className="eyebrow">Офлайн-снимок от сервера</p>
+                        <h2 id="snapshot-heading">Назначенная отправка</h2>
                       </div>
-                      <span className="status-badge">{snapshot.status.replaceAll('_', ' ')}</span>
+                      <span className="status-badge">{shipmentStatusLabel(snapshot.status)}</span>
                     </div>
                     <dl className="snapshot-facts">
                       <div>
-                        <dt>Shipment</dt>
+                        <dt>Отправка</dt>
                         <dd className="mono">{snapshot.shipment_id}</dd>
                       </div>
                       <div>
-                        <dt>Manifest revision</dt>
+                        <dt>Версия манифеста</dt>
                         <dd>{snapshot.manifest_revision}</dd>
                       </div>
                       <div>
-                        <dt>Snapshot issued</dt>
-                        <dd>{new Date(snapshot.issued_at).toLocaleString()}</dd>
+                        <dt>Снимок создан</dt>
+                        <dd>{formatDateTime(snapshot.issued_at)}</dd>
                       </div>
                     </dl>
                     {snapshotIsOver24HoursOld(snapshot) && (
                       <p className="snapshot-warning" role="alert">
-                        This snapshot is more than 24 hours old by this device’s clock. The server decides whether review is required.
+                        По часам устройства этому снимку больше 24 часов. Сервер решит, требуется ли проверка.
                       </p>
                     )}
                     <div className="container-section">
                       <div className="section-heading compact-heading">
                         <div>
-                          <p className="eyebrow">Sealed manifest</p>
-                          <h3>{snapshot.containers.length} containers</h3>
+                          <p className="eyebrow">Опечатанный манифест</p>
+                          <h3>Контейнеров: {snapshot.containers.length}</h3>
                         </div>
                       </div>
-                      <ul className="container-list" aria-label="Sealed container codes">
+                      <ul className="container-list" aria-label="Коды опечатанных контейнеров">
                         {snapshot.containers.map((container) => (
                           <li key={container.id}>
                             <span className="container-code">{container.code}</span>
-                            <span className="container-state">{container.delivery_status.replaceAll('_', ' ')}</span>
+                            <span className="container-state">{containerStatusLabel(container.delivery_status)}</span>
                           </li>
                         ))}
                       </ul>
@@ -1143,13 +1149,13 @@ function App() {
                   <div className="actions-grid">
                     <section className="panel action-panel" aria-labelledby="pickup-heading">
                       <p className="step-number">01</p>
-                      <p className="eyebrow">Whole Shipment</p>
-                      <h2 id="pickup-heading">Confirm Pickup</h2>
+                      <p className="eyebrow">Вся отправка</p>
+                      <h2 id="pickup-heading">Подтверждение забора</h2>
                       <p className="muted">
-                        Check each sealed container and enter the complete code set before saving this command.
+                        Проверьте каждый опечатанный контейнер и введите все его коды перед сохранением команды.
                       </p>
                       <form className="stack-form" onSubmit={handleQueuePickup}>
-                        <label htmlFor="confirmed-codes">Confirm all sealed container codes</label>
+                        <label htmlFor="confirmed-codes">Введите коды всех опечатанных контейнеров</label>
                         <textarea
                           id="confirmed-codes"
                           onChange={(event) => setConfirmedCodes(event.target.value)}
@@ -1159,27 +1165,27 @@ function App() {
                           value={confirmedCodes}
                         />
                         {pickupAlreadyQueued && (
-                          <p className="muted">Pickup is already queued for this snapshot. Load a new snapshot before starting another command.</p>
+                          <p className="muted">Забор для этого снимка уже поставлен в очередь. Загрузите новый снимок, прежде чем создавать следующую команду.</p>
                         )}
                         <button
                           className="button button-primary"
                           disabled={busy || pickupAlreadyQueued}
                           type="submit"
                         >
-                          Queue Pickup confirmation
+                          Поставить подтверждение забора в очередь
                         </button>
                       </form>
                     </section>
 
                     <section className="panel action-panel" aria-labelledby="delivery-heading">
                       <p className="step-number">02</p>
-                      <p className="eyebrow">One container</p>
-                      <h2 id="delivery-heading">Start Delivery</h2>
+                      <p className="eyebrow">Один контейнер</p>
+                      <h2 id="delivery-heading">Начать доставку</h2>
                       <p className="muted">
-                        Choose one sealed container. If its Pickup is queued here, link this action explicitly.
+                        Выберите один опечатанный контейнер. Если подтверждение его забора уже в очереди, явно свяжите с ним доставку.
                       </p>
                       <form className="stack-form" onSubmit={handleQueueDelivery}>
-                        <label htmlFor="container-to-deliver">Container to deliver</label>
+                        <label htmlFor="container-to-deliver">Контейнер для доставки</label>
                         <select
                           id="container-to-deliver"
                           onChange={(event) => setSelectedContainerId(event.target.value)}
@@ -1199,11 +1205,11 @@ function App() {
                               onChange={(event) => setLinkDelivery(event.target.checked)}
                               type="checkbox"
                             />
-                            <span>Link this delivery to my queued Pickup</span>
+                            <span>Связать доставку с ожидающим подтверждением забора</span>
                           </label>
                         )}
                         {!canQueueDelivery && (
-                          <p className="muted">Queue a Pickup first, or load a snapshot with confirmed Pickup.</p>
+                          <p className="muted">Сначала поставьте забор в очередь или загрузите снимок с подтверждённым забором.</p>
                         )}
                         <button
                           className="button button-secondary"
@@ -1214,7 +1220,7 @@ function App() {
                           }
                           type="submit"
                         >
-                          Queue one-container Delivery
+                          Поставить доставку одного контейнера в очередь
                         </button>
                       </form>
                     </section>
@@ -1224,13 +1230,13 @@ function App() {
                 <aside className="workspace-aside">
                   <CommandQueue items={queue} />
                   <section className="panel sync-panel" aria-labelledby="sync-heading">
-                    <p className="eyebrow">Foreground only</p>
-                    <h2 id="sync-heading">Synchronize</h2>
+                    <p className="eyebrow">Только по запросу</p>
+                    <h2 id="sync-heading">Синхронизация</h2>
                     <p className="muted">
-                      Commands sync only when you choose this action. If a reply is lost, retry sends the saved command unchanged.
+                      Команды отправляются только после нажатия кнопки. Если ответ потерян, повторная попытка отправит сохранённую команду без изменений.
                     </p>
                     {!isOnline && (
-                      <p className="offline-note">Offline · pending commands stay on this device.</p>
+                      <p className="offline-note">Нет сети · ожидающие команды остаются на этом устройстве.</p>
                     )}
                     <button
                       className="button button-primary sync-button"
@@ -1238,7 +1244,7 @@ function App() {
                       onClick={handleSync}
                       type="button"
                     >
-                      {busy ? 'Synchronizing…' : 'Sync pending commands'}
+                      {busy ? 'Синхронизируем…' : 'Синхронизировать команды'}
                     </button>
                   </section>
                 </aside>
@@ -1249,9 +1255,9 @@ function App() {
               <div className="workspace-grid">
                 <section className="panel empty-state">
                   <div className="empty-icon" aria-hidden="true">↗</div>
-                  <h2>Load an assigned Shipment</h2>
+                  <h2>Загрузите назначенную отправку</h2>
                   <p className="muted">
-                    A successful load saves a server-issued, PHI-free snapshot for this account on this device.
+                    После загрузки на устройство сохранится снимок от сервера без медицинских данных.
                   </p>
                 </section>
                 <CommandQueue items={queue} />
@@ -1280,7 +1286,7 @@ function App() {
               ? 'Входящие'
               : 'Courier'}
         </span>
-        <span>Server custody remains authoritative</span>
+        <span>Статус передачи на сервере остаётся основным</span>
       </footer>
 
       {dialog?.kind === 'switch-login' && (

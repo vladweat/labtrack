@@ -25,6 +25,7 @@ import type {
   ShipmentSummary,
   SyncResult,
 } from './types';
+import { localizeApiError } from './localization';
 
 const apiBase = (import.meta.env.VITE_API_BASE ?? '/api/v1').replace(/\/$/, '');
 
@@ -63,17 +64,19 @@ async function request<T>(
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as
       | {
-          detail?: string;
-          message?: string;
-          error?: { detail?: string; message?: string };
+          detail?: unknown;
+          message?: unknown;
+          error?: { detail?: unknown; message?: unknown };
         }
       | null;
+    const serverMessage = [
+      payload?.detail,
+      payload?.message,
+      payload?.error?.detail,
+      payload?.error?.message,
+    ].find((value): value is string => typeof value === 'string');
     throw new ApiError(
-      payload?.detail ??
-        payload?.message ??
-        payload?.error?.detail ??
-        payload?.error?.message ??
-        `Request failed with ${response.status}.`,
+      localizeApiError(serverMessage ?? '', response.status),
       response.status,
     );
   }

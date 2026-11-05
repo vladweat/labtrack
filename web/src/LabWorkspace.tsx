@@ -19,6 +19,16 @@ import type {
   ShipmentManifest,
   ShipmentManifestItem,
 } from './types';
+import {
+  containerStatusLabel,
+  formatDateTime,
+  issueReasonLabel,
+  materialTypeLabel,
+  receiptResultLabel,
+  receivingSessionStatusLabel,
+  safeErrorMessage,
+  shipmentStatusLabel,
+} from './localization';
 
 type LabWorkspaceProps = {
   user: CurrentUser;
@@ -34,20 +44,12 @@ type ResultDraft = {
   comment: string;
 };
 
-const STATUS_LABELS: Record<string, string> = {
-  DELIVERY_PENDING: 'Ожидает приёмки',
-  PARTIALLY_DELIVERED: 'Частично доставлено',
-  RECEIVING: 'Приёмка',
-  COMPLETED: 'Завершено',
-  COMPLETED_WITH_ISSUES: 'Завершено с замечаниями',
-};
-
 function statusLabel(status: string): string {
-  return STATUS_LABELS[status] ?? status.replaceAll('_', ' ');
+  return shipmentStatusLabel(status);
 }
 
 function messageForError(error: unknown): string {
-  return error instanceof Error ? error.message : 'Не удалось выполнить запрос. Повторите попытку.';
+  return safeErrorMessage(error, 'Не удалось выполнить запрос. Проверьте соединение и повторите попытку.');
 }
 
 function idempotencyKey(): string {
@@ -57,7 +59,7 @@ function idempotencyKey(): string {
 function formatDate(value: string | null): string {
   if (!value) return '—';
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  return Number.isNaN(date.getTime()) ? value : formatDateTime(value);
 }
 
 export function LabWorkspace({
@@ -303,7 +305,7 @@ export function LabWorkspace({
       await refreshSelected(result.shipment_id, userId, signal);
       if (!requestIsCurrent(userId, signal)) return;
       completeOperation(operation);
-      setMessage(`Receipt confirmed by the server. Current Shipment status: ${statusLabel(result.shipment_status)}.`);
+      setMessage(`Приёмка контейнера подтверждена. Текущий статус отправки: ${statusLabel(result.shipment_status)}.`);
     } catch (cause) {
       handleError(cause, userId, signal);
     } finally {
@@ -324,7 +326,7 @@ export function LabWorkspace({
           comment: draft.comment.trim() || null,
         };
     if (body.result !== 'ACCEPTED' && !body.reason_code) {
-      setError('Choose an active reason for this result.');
+      setError('Выберите активную причину для этого результата.');
       return;
     }
     const operation = `result:${selectedShipment.id}:${item.id}:${JSON.stringify(body)}`;
@@ -344,7 +346,7 @@ export function LabWorkspace({
       await refreshSelected(selectedShipment.id, userId, signal);
       if (!requestIsCurrent(userId, signal)) return;
       completeOperation(operation);
-      setMessage(`Result saved for ${item.sample_code}.`);
+      setMessage(`Результат для образца ${item.sample_code} сохранён.`);
     } catch (cause) {
       handleError(cause, userId, signal);
     } finally {
@@ -372,7 +374,7 @@ export function LabWorkspace({
       await refreshSelected(updated.id, userId, signal);
       if (!requestIsCurrent(userId, signal)) return;
       completeOperation(operation);
-      setMessage(`Receiving completed by the server. Current Shipment status: ${statusLabel(updated.status)}.`);
+      setMessage(`Приёмка завершена. Текущий статус отправки: ${statusLabel(updated.status)}.`);
     } catch (cause) {
       handleError(cause, userId, signal);
     } finally {
@@ -388,7 +390,7 @@ export function LabWorkspace({
     if (!requestIsCurrent(userId, signal)) return;
     const reason = reopenReason.trim();
     if (!reason) {
-      setError('A reason is required to reopen receiving.');
+      setError('Укажите причину повторного открытия приёмки.');
       return;
     }
     const operation = `reopen:${selectedShipment.id}:${reason}`;
@@ -408,7 +410,7 @@ export function LabWorkspace({
       if (!requestIsCurrent(userId, signal)) return;
       completeOperation(operation);
       setReopenReason('');
-      setMessage(`Receiving reopened by the server. Current Shipment status: ${statusLabel(updated.status)}.`);
+      setMessage(`Приёмка открыта повторно. Текущий статус отправки: ${statusLabel(updated.status)}.`);
     } catch (cause) {
       handleError(cause, userId, signal);
     } finally {
@@ -444,20 +446,20 @@ export function LabWorkspace({
     <div className="lab-workspace">
       <section className="operations-intro" aria-labelledby="lab-workspace-heading">
         <div>
-          <p className="eyebrow">Destination laboratory</p>
-          <h1 id="lab-workspace-heading">Lab workspace</h1>
-          <p className="muted">Confirm each Delivery using the sealed container code, then record sample results in the open receiving session.</p>
+          <p className="eyebrow">Лаборатория-получатель</p>
+          <h1 id="lab-workspace-heading">Рабочая область лаборатории</h1>
+          <p className="muted">Подтверждайте доставку по коду опечатанного контейнера, затем записывайте результаты образцов в открытом сеансе приёмки.</p>
         </div>
         <div className="operations-stamp" aria-hidden="true">L</div>
       </section>
 
       {error && <p className="page-alert" role="alert">{error}</p>}
       {message && <p className="page-message" role="status" aria-live="polite">{message}</p>}
-      {loading && <p role="status">Loading destination Shipments…</p>}
+      {loading && <p role="status">Загружаем отправки для лаборатории…</p>}
 
       {!loading && shipments.length === 0 && (
         <section className="panel lab-panel">
-          <p className="muted">No Shipments are assigned to this Laboratory.</p>
+          <p className="muted">Этой лаборатории пока не назначены отправки.</p>
         </section>
       )}
 
@@ -466,11 +468,11 @@ export function LabWorkspace({
           <section className="panel lab-panel" aria-labelledby="lab-shipments-heading">
             <div className="section-heading">
               <div>
-                <p className="eyebrow">Destination organization</p>
-                <h2 id="lab-shipments-heading">Shipments</h2>
+                <p className="eyebrow">Организация-получатель</p>
+                <h2 id="lab-shipments-heading">Отправки</h2>
               </div>
             </div>
-            <ul className="lab-shipment-list" aria-label="Destination Shipments">
+            <ul className="lab-shipment-list" aria-label="Отправки для лаборатории">
               {shipments.map((shipment) => (
                 <li key={shipment.id}>
                   <button
@@ -490,33 +492,33 @@ export function LabWorkspace({
 
           <div className="lab-detail-column">
             {selectedShipment && detailsShipmentId !== selectedShipment.id && (
-              <p role="status">Loading Shipment manifest and receiving history…</p>
+              <p role="status">Загружаем манифест отправки и историю приёмки…</p>
             )}
             {selectedShipment && detailsShipmentId === selectedShipment.id && manifest && (
               <section className="panel lab-panel" aria-labelledby="lab-detail-heading">
                 <div className="section-heading">
                   <div>
-                    <p className="eyebrow">Server record</p>
-                    <h2 id="lab-detail-heading">Shipment {selectedShipment.code}</h2>
+                    <p className="eyebrow">Запись на сервере</p>
+                    <h2 id="lab-detail-heading">Отправка {selectedShipment.code}</h2>
                   </div>
-                  <span className="status-badge" data-testid="lab-shipment-status">{selectedShipment.status}</span>
+                  <span className="status-badge" data-testid="lab-shipment-status">{statusLabel(selectedShipment.status)}</span>
                 </div>
                 {manifest ? (
                   <>
-                    <p className="muted">Manifest revision {manifest.manifest_revision}</p>
+                    <p className="muted">Версия манифеста: {manifest.manifest_revision}</p>
                     <div className="lab-container-list">
                       {manifest.containers.map((container) => (
                         <section className="lab-container-card" key={container.id} aria-labelledby={`container-${container.id}`}>
                           <div className="section-heading">
                             <div>
-                              <p className="eyebrow">Container</p>
+                              <p className="eyebrow">Контейнер</p>
                               <h3 id={`container-${container.id}`}>{container.code}</h3>
                             </div>
-                            <span className="status-badge">{container.delivery_status}</span>
+                            <span className="status-badge">{containerStatusLabel(container.delivery_status)}</span>
                           </div>
                           {container.delivery_status === 'DELIVERY_PENDING' && (canOperateSelected || canManageSelected) && (
                             <div className="stack-form lab-receipt-form">
-                              <label htmlFor={`receipt-code-${container.id}`}>Receipt container code</label>
+                              <label htmlFor={`receipt-code-${container.id}`}>Код контейнера при приёмке</label>
                               <input
                                 id={`receipt-code-${container.id}`}
                                 autoComplete="off"
@@ -532,11 +534,11 @@ export function LabWorkspace({
                                 onClick={() => void confirmReceiptHandler(container.id)}
                                 type="button"
                               >
-                                Confirm receipt
+                                Подтвердить приёмку
                               </button>
                             </div>
                           )}
-                          <ul className="lab-item-list" aria-label={`Samples in ${container.code}`}>
+                          <ul className="lab-item-list" aria-label={`Образцы в контейнере ${container.code}`}>
                             {container.items.map((item) => {
                               const draft = draftFor(item);
                               const matchingReasons = reasons.filter((reason) => reason.kind === draft.result);
@@ -544,17 +546,17 @@ export function LabWorkspace({
                                 <li className="lab-item-card" key={item.id}>
                                   <div className="lab-item-summary">
                                     <strong>{item.sample_code}</strong>
-                                    <span>{item.material_type}</span>
+                                    <span>{materialTypeLabel(item.material_type)}</span>
                                   </div>
                                   <p className="muted">
-                                    Result: {item.receipt_result ?? 'Not recorded'}
-                                    {item.receipt_reason_code ? ` · ${item.receipt_reason_code}` : ''}
+                                    Результат: {receiptResultLabel(item.receipt_result)}
+                                    {item.receipt_reason_code ? ` · ${issueReasonLabel(item.receipt_reason_code)}` : ''}
                                   </p>
                                   {canOperateSelected &&
                                     container.delivery_status === 'RECEIVED' &&
                                     manifest.status === 'RECEIVING' && (
                                       <div className="stack-form lab-result-form">
-                                        <label htmlFor={`result-${item.id}`}>Result for {item.sample_code}</label>
+                                        <label htmlFor={`result-${item.id}`}>Результат для образца {item.sample_code}</label>
                                         <select
                                           id={`result-${item.id}`}
                                           onChange={(event) => updateResultDraft(item, {
@@ -562,25 +564,25 @@ export function LabWorkspace({
                                           })}
                                           value={draft.result}
                                         >
-                                          <option value="ACCEPTED">Accepted</option>
-                                          <option value="MISSING">Missing</option>
-                                          <option value="REJECTED">Rejected</option>
+                                          <option value="ACCEPTED">Принят</option>
+                                          <option value="MISSING">Отсутствует</option>
+                                          <option value="REJECTED">Отклонён</option>
                                         </select>
                                         {draft.result !== 'ACCEPTED' && (
                                           <>
-                                            <label htmlFor={`reason-${item.id}`}>Reason for {item.sample_code}</label>
+                                            <label htmlFor={`reason-${item.id}`}>Причина для образца {item.sample_code}</label>
                                             <select
                                               id={`reason-${item.id}`}
                                               onChange={(event) => updateResultDraft(item, { reasonCode: event.target.value })}
                                               value={draft.reasonCode}
                                               required
                                             >
-                                              <option value="">Select an active Sample reason</option>
+                                              <option value="">Выберите активную причину</option>
                                               {matchingReasons.map((reason) => (
-                                                <option key={reason.id} value={reason.code}>{reason.label}</option>
+                                                <option key={reason.id} value={reason.code}>{issueReasonLabel(reason.code)}</option>
                                               ))}
                                             </select>
-                                            <label htmlFor={`comment-${item.id}`}>Comment for {item.sample_code}</label>
+                                            <label htmlFor={`comment-${item.id}`}>Комментарий к образцу {item.sample_code}</label>
                                             <textarea
                                               id={`comment-${item.id}`}
                                               maxLength={500}
@@ -595,7 +597,7 @@ export function LabWorkspace({
                                           onClick={() => void recordResultHandler(item, draft)}
                                           type="button"
                                         >
-                                          Record result for {item.sample_code}
+                                          Сохранить результат для {item.sample_code}
                                         </button>
                                       </div>
                                     )}
@@ -614,15 +616,15 @@ export function LabWorkspace({
                         onClick={() => void completeHandler()}
                         type="button"
                       >
-                        Complete receiving
+                        Завершить приёмку
                       </button>
                     )}
 
                     {canManageSelected &&
                       ['COMPLETED', 'COMPLETED_WITH_ISSUES'].includes(selectedShipment.status) && (
                         <form className="stack-form lab-reopen-form" onSubmit={reopenHandler}>
-                          <h3>Reopen receiving</h3>
-                          <label htmlFor="reopen-reason">Reopen reason</label>
+                          <h3>Повторно открыть приёмку</h3>
+                          <label htmlFor="reopen-reason">Причина повторного открытия</label>
                           <textarea
                             id="reopen-reason"
                             maxLength={500}
@@ -631,13 +633,13 @@ export function LabWorkspace({
                             value={reopenReason}
                           />
                           <button className="button button-secondary" disabled={Boolean(busy) || !reopenReason.trim()} type="submit">
-                            Reopen receiving
+                            Открыть повторно
                           </button>
                         </form>
                       )}
                   </>
                 ) : (
-                  <p role="status">Loading Shipment manifest…</p>
+                  <p role="status">Загружаем манифест отправки…</p>
                 )}
               </section>
             )}
@@ -646,39 +648,39 @@ export function LabWorkspace({
               <section className="panel lab-panel" aria-labelledby="lab-history-heading">
                 <div className="section-heading">
                   <div>
-                    <p className="eyebrow">Receiving audit trail</p>
-                    <h2 id="lab-history-heading">Receiving history</h2>
+                    <p className="eyebrow">Журнал приёмки</p>
+                    <h2 id="lab-history-heading">История приёмки</h2>
                   </div>
                 </div>
-                <h3>Sessions</h3>
+                <h3>Сеансы</h3>
                 {history.sessions.length === 0 ? (
-                  <p className="muted">No receiving session has been opened yet.</p>
+                  <p className="muted">Сеансы приёмки ещё не открывались.</p>
                 ) : (
                   <ol className="lab-history-list">
                     {history.sessions.map((session) => (
                       <li key={session.id}>
-                        <strong>Session {session.sequence} · {session.status}</strong>
-                        <span>Opened {formatDate(session.opened_at)}</span>
-                        {session.closed_at && <span>Closed {formatDate(session.closed_at)}</span>}
-                        {session.reopen_reason && <span>Reopen reason: {session.reopen_reason}</span>}
+                        <strong>Сеанс {session.sequence} · {receivingSessionStatusLabel(session.status)}</strong>
+                        <span>Открыт: {formatDate(session.opened_at)}</span>
+                        {session.closed_at && <span>Закрыт: {formatDate(session.closed_at)}</span>}
+                        {session.reopen_reason && <span>Причина повторного открытия: {session.reopen_reason}</span>}
                       </li>
                     ))}
                   </ol>
                 )}
-                <h3>Result revisions</h3>
-                <p className="muted">Showing {history.revisions.length} of {history.total_revisions} revisions</p>
+                <h3>Изменения результатов</h3>
+                <p className="muted">Показано записей: {new Intl.NumberFormat('ru-RU').format(history.revisions.length)} из {new Intl.NumberFormat('ru-RU').format(history.total_revisions)}</p>
                 {history.revisions.length === 0 ? (
-                  <p className="muted">No result revisions have been recorded.</p>
+                  <p className="muted">Изменения результатов не записаны.</p>
                 ) : (
                   <ol className="lab-history-list">
                     {history.revisions.map((revision) => (
                       <li key={revision.id}>
-                        <strong>{revision.old_result ?? '—'} → {revision.new_result}</strong>
-                        <span>Sample item {revision.container_item_id}</span>
-                        {revision.new_reason_code && <span>Reason: {revision.new_reason_code}</span>}
-                        {revision.new_comment && <span>Comment: {revision.new_comment}</span>}
-                        <span>Changed by {revision.changed_by}</span>
-                        <span>Changed {formatDate(revision.changed_at)}</span>
+                        <strong>{receiptResultLabel(revision.old_result)} → {receiptResultLabel(revision.new_result)}</strong>
+                        <span>Образец: {revision.container_item_id}</span>
+                        {revision.new_reason_code && <span>Причина: {issueReasonLabel(revision.new_reason_code)}</span>}
+                        {revision.new_comment && <span>Комментарий: {revision.new_comment}</span>}
+                        <span>Изменил пользователь: {revision.changed_by}</span>
+                        <span>Изменено: {formatDate(revision.changed_at)}</span>
                       </li>
                     ))}
                   </ol>
@@ -690,7 +692,7 @@ export function LabWorkspace({
                     onClick={() => void loadOlderRevisionsHandler()}
                     type="button"
                   >
-                    {historyLoading ? 'Loading revisions…' : 'Load older revisions'}
+                    {historyLoading ? 'Загружаем изменения…' : 'Загрузить более ранние изменения'}
                   </button>
                 )}
               </section>

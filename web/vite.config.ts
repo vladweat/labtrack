@@ -19,9 +19,10 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['pwa-icon.svg', 'icons/courier-192.png', 'icons/courier-512.png'],
       manifest: {
-        name: 'LabTrack Courier',
-        short_name: 'Courier',
-        description: 'Offline Pickup and per-container Delivery for LabTrack Couriers.',
+        lang: 'ru',
+        name: 'LabTrack — курьер',
+        short_name: 'Курьер',
+        description: 'Офлайн-учёт забора и доставки лабораторных отправок в LabTrack.',
         start_url: '/',
         scope: '/',
         display: 'standalone',
