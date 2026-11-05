@@ -1,6 +1,8 @@
 # Backend development
 
-The backend is a FastAPI modular monolith. Foundation provides identity and scoped authorization. Manifest adds Samples and opaque external references, a fixed issue-reason catalog, DRAFT Shipments, Containers/items, courier assignment, idempotent writes, audit records, and database-enforced immutability on seal. Stage C implements bilateral whole-Shipment Pickup; Stage D implements normal bilateral per-container Delivery, Lab receipt, withdrawal, history, and the first ReceivingSession. ContainerIssue/exceptional receipt, tube-result receiving, and offline sync remain later stages. Operator-controlled user provisioning is available through `python -m app.cli`.
+The backend is a FastAPI modular monolith. Implemented modules cover scoped identity and organizations, Samples and Shipments, bilateral whole-Shipment Pickup, per-container Delivery, lab receiving and revisions, custody incidents and exceptional receipt, Courier offline sync, audit/idempotency, operations, analytics, and Inbox. PostgreSQL is authoritative for business state; Redis/Celery support best-effort notifications. User provisioning is operator-controlled through `python -m app.cli`.
+
+See the [architecture](../docs/architecture.md), [workflows](../docs/workflows.md), and [API guide](../docs/api.md) for a compact implementation overview.
 
 From this directory, create a virtual environment and install the project with development tools:
 
@@ -68,7 +70,7 @@ Each command validates that the selected scope exists and is active, checks that
 
 JWT roles are not embedded in tokens. Protected use cases must use `Principal`/`require_roles` and verify the active organization or region scope against the target resource. A role match by itself is not an ownership check. Redis is not required for readiness or authentication.
 
-Run static checks with `ruff check .`, `ruff format --check .`, and `python -m compileall -q app alembic tests`. The suite covers Foundation authorization plus Manifest API behavior, idempotency replay, sample-to-container membership, sealing, direct SQL trigger rejection, and runtime-role ownership limits.
+Useful static checks are `ruff check .`, `ruff format --check .`, and `python -m compileall -q app alembic tests`.
 
 Prepare a dedicated test database and runtime role; the suite truncates test rows before each test and refuses to run without an explicit test-database name and opt-in flag:
 

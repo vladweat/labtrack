@@ -1,6 +1,6 @@
 # LabTrack v0.6.1 — PostgreSQL Delta & Integrity Rules
 
-**Status (2026-11-02):** revisions `0001`–`0009_stage_g_offline` implement merged Stages A–G at `main`/`origin/main` `11c7804`; Stage G is independently verified. The current uncommitted Stage H tree adds migration `0010_notifications` for the Inbox, but that migration has not been applied or runtime-verified. Analytics currently reads current PostgreSQL state without a persistence schema. ContainerIssue/custody evidence and NORMAL/EXCEPTIONAL receipt are in Stage E; append-only receiving revisions/lifecycle guards are in Stage F; Stage G adds the offline tables/fields below. Preserve Shipment-first locking, partially delivered receiving, and sealed manifest triggers. User-approved changes: [20-decisions-v061.md](20-decisions-v061.md).
+**Scope:** PostgreSQL model and integrity requirements for v0.6.1, not a current schema dump or ERD. The current backend includes custody incidents and receipt evidence, receiving revisions, Courier offline replay, Inbox/operations, role-scoped workspaces, and target-scoped idempotency through migration `0011_http_request_scope`. Check the current migrations and models for exact schema. Preserve Shipment-first locking, partial receiving, and sealed-manifest integrity. Approved changes: [20-decisions-v061.md](20-decisions-v061.md).
 
 ## 1. New tables (proposed physical mapping)
 
@@ -109,4 +109,4 @@ Checks: receipt evidence XOR normal_handoff_id/incident_id; immutable evidence; 
 7. Add incident/evidence models with **approved witness/pickup/role guards** and unit + PostgreSQL tests; feature flag may be used for controlled rollout but no product sign-off remains pending.
 8. Apply real Alembic migrations against PostgreSQL, validate upgrade and rollback/forward on disposable DB; test row-level security boundaries at application layer.
 
-Stages E–G schema and guards are implemented through `0009_stage_g_offline` and passed independent PostgreSQL migration-cycle and backend verification; they are merged to `main`. The uncommitted Stage H `0010_notifications` migration adds the Inbox table but has not been applied or verified. Analytics uses read-time queries and has no snapshot persistence table.
+The current schema is defined by the committed Alembic migrations and backend models. This document remains a requirement/design delta; its migration strategy below is not a statement that those steps remain pending. For the concise runtime model, see [data and integrity](data-and-integrity.md).

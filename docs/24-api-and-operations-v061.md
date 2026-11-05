@@ -1,6 +1,6 @@
 # LabTrack v0.6.1 — API Contracts, Inbox, SLA and Analytics
 
-**Status: FINAL PRODUCT/API REQUIREMENTS for synthetic MVP, 2026-11-01.** Base `/api/v1`, OpenAPI 3.1 design contract. OPEN-01–04 are approved in [Decision Register](20-decisions-v061.md). This document defines normative requirements; current implementation status is tracked in the README and roadmap.
+**Requirements status: APPROVED for the synthetic MVP (2026-11-01).** Base `/api/v1`, OpenAPI 3.1 design contract. OPEN-01–04 are approved in the [Decision Register](20-decisions-v061.md). Sections explicitly marked implemented describe code behavior; other sections remain normative requirements. The static OpenAPI JSON is a draft, not the complete runtime contract; see [API guide](api.md).
 
 ## 1. Approved API endpoints
 
@@ -111,22 +111,15 @@ The sync outcomes are `APPLIED`, `ALREADY_APPLIED`, `REJECTED`, `RETRYABLE`, and
 
 The React/TypeScript/Vite PWA stores per-user snapshots and immutable commands in IndexedDB; access tokens remain in memory, API traffic is network-only, and the service worker caches only shell assets. It reauthenticates after reload, warns and purges the scoped queue on logout/account change, and syncs in the foreground. A locally pending command is not a server custody event. Production hosting is outside Stage G.
 
-### Stage I role-workspace API additions
+Detailed replay compaction is available as `python -m app.cli compact-offline-replays` from `backend/`. Scheduling and deployment details are environment-specific and are not part of this API contract.
+
+### Stage I role-workspace API additions (implemented)
 
 - `GET /organizations/{organization_id}/couriers` requires an active `SENDER_OPERATOR` grant to that organization and returns only active Couriers in its active region, with stable ordering and pagination. Email addresses are not returned.
 - `GET /shipments` is paginated and role-scoped: Sender Operators and Lab Managers see their organization's shipments, Lab Operators see shipments for their destination organization, and Couriers see their assigned shipments in an active Courier region.
 - HTTP idempotency now includes route resource context as well as the validated request body; an identical key/body targeting another resource cannot replay the first resource's response. Migration `0011_http_request_scope` adds/backfills this context.
 
-### Public demo login throttling
-
-The demo's `POST /auth/token` endpoint counts failed authentication attempts by
-source IP: the default limit is 30 failures in 900 seconds, after which the
-response is `429` with `Retry-After`. Successful authentication clears that
-source's failure bucket; there is no account-wide lockout. The limiter is
-process-local in the current single-worker API, so an API restart clears its
-counters and multiple API processes would not share them. Viewers behind one
-NAT share a source-IP bucket. This is a modest guard for shared synthetic
-accounts, not a distributed rate-limit or abuse-prevention service.
+These additions support the role-specific workspaces. Their current implementation is summarized in the [API guide](api.md) and [workflows](workflows.md).
 
 ## 3. Inbox semantics (Q15)
 
@@ -136,13 +129,15 @@ accounts, not a distributed rate-limit or abuse-prevention service.
 - `notifications` table deduplicates (recipient_user_id,event_id,type). Celery creates/delivers notifications best effort. Redis or Celery worker failure may delay or miss Inbox entries; stalled cases are queried from authoritative PostgreSQL and remain visible through those failures. PostgreSQL has no dashboard fallback; an outage may make dashboard APIs unavailable.
 - Notifications to stage participants obey org/region scope; regional escalation excludes row-level Sample data for REGIONAL_ANALYST.
 
+Inbox generation is best-effort and does not define a delivery SLA. PostgreSQL business state remains authoritative when Redis or Celery is unavailable.
+
 ## Request correlation
 
 Every API response includes a server-generated UUID in `X-Request-ID`. The server ignores caller-supplied values for that header and never echoes or logs them. Use the returned UUID to correlate the request with safe structured server logs.
 
 ## 4. Stalled operation monitoring (Q19)
 
-| Workflow | Default demo threshold | Response |
+| Workflow | Approved synthetic-MVP threshold | Response |
 |---|---|---|
 | Shipment PICKUP_PENDING | 4 hours | Alert relevant Sender/Courier and escalate to REGIONAL_OPERATIONS |
 | Container DELIVERY_PENDING | 4 hours | Alert assigned Courier, destination Lab and regional operations |
@@ -183,4 +178,4 @@ Return one item per qualifying case: `PICKUP_PENDING`, `DELIVERY_PENDING`, `PROP
 | `IDEMPOTENCY_KEY_REUSED` | Same Courier command ID with changed canonical request |
 | `NOTIFICATION_NOT_FOUND` | Notification outside caller's own Inbox (masked 404) |
 
-All state-changing endpoints require a stable Idempotency-Key except Courier batch sync where each command has client_command_id; GET requires none. Use 409 for business conflicts, 422 for invalid shape, scoped 403 or masked 404 for authorization. Exceptional endpoints are implemented in Stage E; the witness, scope and concurrency requirements above remain acceptance and regression checks. Current implementation and verification status is in the [roadmap](19-roadmap-v06.md).
+All state-changing endpoints require a stable Idempotency-Key except Courier batch sync where each command has client_command_id; GET requires none. Use 409 for business conflicts, 422 for invalid shape, scoped 403 or masked 404 for authorization. Exceptional endpoints are implemented; witness, scope and concurrency rules remain acceptance and regression requirements. See the [API guide](api.md) for the runtime contract boundary.

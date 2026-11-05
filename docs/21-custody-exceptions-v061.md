@@ -1,6 +1,6 @@
 # LabTrack v0.6.1 — Approved Custody Incidents & Exceptional Receipt
 
-**Status: APPROVED FOR IMPLEMENTATION (synthetic MVP), 2026-11-01.** OPEN-01–03 closed in [Decision Register](20-decisions-v061.md). This is an implementable *specification*, not deployed functionality, legal proof or a digital signature.
+**Requirements status: APPROVED for the synthetic MVP (2026-11-01).** OPEN-01–03 are closed in the [Decision Register](20-decisions-v061.md). This is a normative specification; custody-incident and exceptional-receipt behavior is implemented in the backend. It is not legal proof or a digital signature. See [workflows](workflows.md) for the implementation summary.
 
 ## 1. Normal and exceptional receipt evidence
 

@@ -72,7 +72,7 @@ These are the **recommended v0.6 implementation defaults**. They are explicit an
 - [Per-container workflows](16-domain-workflows-v06.md)
 - [Data model and concurrency](17-data-model-v06.md)
 - [REST API and offline changes](18-api-v06.md)
-- [Implementation and acceptance](19-roadmap-v06.md)
+- [Current project documentation and workflow index](README.md)
 - [OpenAPI v0.6 draft](../openapi/labtrack-v1.json)
 
 Older design documents remain as evolution history and must not be used as v0.6 source-of-truth where they conflict with this register.

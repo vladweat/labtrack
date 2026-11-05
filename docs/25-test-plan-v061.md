@@ -1,5 +1,7 @@
 # LabTrack v0.6.1 — Verification, Test Matrix & Implementation Gates
 
+**Scope:** requirement-level verification plan and implementation gates, not a report of current test execution. Use **real PostgreSQL** for locks, triggers, partial indexes and migration testing. This plan does not establish capacity, SLA, clinical certification, or readiness for real medical data.
+
 ## 1. P0 — Chain of custody
 
 | Test | Precondition and expected result |
@@ -65,6 +67,16 @@
 
 ## 4. Cross-cutting gates
 
+- Auth: Argon2id, short-lived JWT, per-use-case active RBAC and tenant/region scope, IDOR masked 404 when appropriate, tests for region analyst aggregate-only.
+- DB: each state mutation + audit + revisions + idempotency response shares one PostgreSQL transaction; no partial effects upon audit failure.
+- Triggers: DB owner/runtime roles distinct; direct SQL bypass test; test SQLSTATE 40P01 retry without double commit.
+- Stage B acceptance: Sample/external-reference scope; optional draft deadline; configured destination validation; courier region membership; one-to-many containers; duplicate Sample exclusion; same-key replay and changed-body conflict; six reason-code labels; seal deadline/state; direct SQL immutability and runtime non-owner privilege checks.
+- API: OpenAPI JSON schema validation and contract tests comparing FastAPI runtime-generated specification to agreed design; explicit 409/422/403/404 cases.
+- Offline: no access tokens in IndexedDB, queue survives refresh, per-account logout purge, per-command ack persisted before queue removal.
+- Courier PWA: shell loads offline without caching API responses; queue remains for the same user after reload/reauth; account-switch cancel/failure preserves the prior session and blocks background interaction; lost response resends exact command ID and payload; local pending is visibly distinct from server custody.
+- Operations: container event history reconstructs who asserted custody and via which evidence method; never confuse EXCEPTIONAL with normal Courier confirmation.
+- Synthetic-environment acceptance: fixtures, smoke checks, backup/restore, structured logs, and CI are deployment verification targets. They do not establish clinical certification or readiness for real medical data.
+
 ## 5. Definition of Ready vs Done
 
 **Specification Ready for Foundation:** all 19 selected answers recorded, v0.6.1 API and schema draft coherent, core normal workflow unchanged.
@@ -73,6 +85,8 @@
 
 **Offline acceptance (OPEN-04 APPROVED):** manifest revision, target Container/Handoff version, Pickup phase and active authorization are relevant; unrelated Shipment bookkeeping alone is not. The 24-hour snapshot guard, 90-day replay, tombstones, two-device conflicts and explicit same-snapshot Pickup→Delivery dependency are Stage G acceptance requirements.
 
-**Stage G verification boundary:** PostgreSQL backend and Playwright UI suites pass independently. Playwright intercepts `/api/v1/**`; it verifies browser/offline behavior but does not exercise the Vite app against live FastAPI/PostgreSQL. Production hosting and compaction scheduling are outside Stage G.
+**Stage G test boundary:** Backend tests exercise PostgreSQL behavior, while the Playwright UI suite intercepts `/api/v1/**` and tests browser/offline behavior separately. The mocked browser suite does not exercise the Vite app against live FastAPI/PostgreSQL. Production hosting and compaction scheduling are outside Stage G.
+
+**Stage I acceptance boundary:** `npm run test:acceptance:local` exercises the Sender→Courier→Lab workflow against disposable PostgreSQL and local FastAPI/Vite. It is separate from the default mocked browser suite and does not certify a hosted environment.
 
 **Scope control:** no new third Sample/Container discrepancy type, no phantom witness signatures, no retrospective custody acceptance from stale commands, no Courier reassignment after seal.

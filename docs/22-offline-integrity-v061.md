@@ -1,6 +1,6 @@
 # LabTrack v0.6.1 — Offline Integrity, Snapshot Age and Idempotency
 
-**Status: APPROVED; implementation merged to `main` (`11c7804`) after verification at `0a84432` (2026-11-02).** Approved Q07–Q11 and final OPEN-04 definition in [Decision Register](20-decisions-v061.md). Preserve v0.6 per-container delivery. The server is authoritative, not device time. A separate Courier-only synthetic demo is publicly deployed; see [roadmap](19-roadmap-v06.md) for its scope and limits.
+**Requirements status: APPROVED (2026-11-02).** Q07–Q11 and final OPEN-04 are recorded in the [Decision Register](20-decisions-v061.md). The Courier offline snapshot and sync flow is implemented; this document remains the normative integrity specification. Preserve v0.6 per-container delivery. The server is authoritative, not device time. See [offline sync](offline-sync.md) for a current implementation summary.
 
 ## 1. Client commands unchanged in meaning
 
@@ -97,4 +97,4 @@ For REVIEW_REQUIRED or REJECTED due to state change:
 
 ## 8. Retention operations handoff
 
-The explicit compaction command is `python -m app.cli compact-offline-replays` (run from `backend/` with the normal database environment). It removes detailed offline replay and causal metadata only after the retention-expiry and tombstone-age checks; the immutable tombstone remains to reserve the command ID and return the minimal authoritative result. Stage G adds no scheduler. Handoff recommendation: Platform Operations should schedule this command daily after service deployment; this is a proposed cadence, not a configured job. The public demo is a separate, limited deployment of this implementation and is not production-ready; automated backup/reset and login rate limiting are not configured there.
+The explicit compaction command is `python -m app.cli compact-offline-replays` (run from `backend/`). It removes detailed offline replay and causal metadata only after the retention-expiry and tombstone-age checks; the immutable tombstone remains to reserve the command ID and return the minimal authoritative result. Scheduling is environment-specific and is not defined by this product specification. See [offline sync](offline-sync.md) for the runtime behavior summary.
