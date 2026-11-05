@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test('public synthetic demo renders its sign-in view and reports readiness', async ({
+test('public synthetic demo renders its Russian sign-in view and reports readiness', async ({
   context,
   page,
   request,
@@ -26,12 +26,12 @@ test('public synthetic demo renders its sign-in view and reports readiness', asy
   const response = await page.goto('/', { waitUntil: 'domcontentloaded' });
   expect(response?.status()).toBe(200);
   expect(new URL(page.url()).origin).toBe(expectedOrigin);
-  await expect(page.getByRole('heading', { name: 'Sign in to continue' })).toBeVisible();
-  await expect(page.getByLabel('Email', { exact: true })).toBeVisible();
-  await expect(page.getByLabel('Password', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Sign in', exact: true })).toBeVisible();
-  await expect(page.getByRole('note', { name: 'Shared demo notice' })).toContainText(
-    'Demo accounts and data are shared and synthetic.',
+  await expect(page.getByRole('heading', { name: 'Вход в LabTrack' })).toBeVisible();
+  await expect(page.getByLabel('Электронная почта', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Пароль', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Войти', exact: true })).toBeVisible();
+  await expect(page.getByRole('note', { name: 'Общее уведомление о демо' })).toContainText(
+    'Учётные записи и данные демо общие и синтетические.',
   );
 
   const readiness = await request.get('/health/ready', { maxRedirects: 0, timeout: 15_000 });
