@@ -1,69 +1,58 @@
-# LabTrack — медицинская логистика, архитектура и API
+# LabTrack
 
-LabTrack — система прослеживаемости передачи лабораторных пробирок в маркированных контейнерах от медицинских учреждений через курьеров в одну центральную лабораторию пилотного региона.
+LabTrack отслеживает передачу лабораторных пробирок от отправителя через курьера до лаборатории — с подтверждениями на каждом этапе.
 
-## Текущий источник истины — v0.6.1
+> **Только синтетические данные.** Свободные ссылки на внешнюю ЛИС могут идентифицировать людей. Не используйте реальные медицинские данные.
 
-Перед разработкой использовать документы в таком порядке:
+**Демо-окружение:** [labtrack.wvzl.site](https://labtrack.wvzl.site) — общий стенд с синтетическими данными; данные и аккаунты могут меняться. Ссылка указывает на окружение, но не обещает его доступность или соответствие текущему коду.
 
-1. **[Decision Register v0.6.1](docs/20-decisions-v061.md)** — 19 утверждённых ответов и финальные OPEN-01–04; OPEN-05 касается только реального медицинского внедрения.
-2. **[Custody Exceptions v0.6.1](docs/21-custody-exceptions-v061.md)** — финальная матрица полномочий для аварийных передач: два работника лаборатории (включая LAB_MANAGER), подтверждённый Pickup, независимое региональное решение без подделки курьера.
-3. **[Offline Integrity v0.6.1](docs/22-offline-integrity-v061.md)** — server-issued snapshots, 24h review, 90d replay, tombstones, многодевайсные конфликты.
-4. **[PostgreSQL Data Model v0.6.1](docs/23-data-model-v061.md)** — новые таблицы, индексы, RBAC guards, транзакции, версии контейнеров.
-5. **[API & Operations v0.6.1](docs/24-api-and-operations-v061.md)** — draft deadline editing, notifications/inbox, аналитика UTC, staggered thresholds.
-6. **[Test Plan v0.6.1](docs/25-test-plan-v061.md)** — negative, security, concurrency, E2E и implementation gates.
-7. **[OpenAPI v0.6.1](openapi/labtrack-v1.json)** — машинно-читаемый контракт; Stage F receiving и Stage G Courier offline операции сверяются с runtime тестами, остальная спецификация остаётся нормативным требованием.
+## Рабочий процесс
 
-Нормативная база v0.6 для **неизменённых** сценариев остаётся действующей, особенно [частичная доставка](docs/16-domain-workflows-v06.md) и [основной DB design](docs/17-data-model-v06.md). При конфликте приоритет: **утверждённые решения v0.6.1 → нормативные v0.6.1 Domain/DB/API → неизменённые правила v0.6 → ранние версии**.
-
-## Утверждённая модель MVP
-
-- **Пилот:** один регион, одна центральная лаборатория, несколько организаций-отправителей; синтетические данные.
-- **Учёт:** одна физическая пробирка = `Sample`, 1:N пробирок в `TransportContainer`, 1:N контейнеров в `Shipment`; sealed manifest защищён сервисными проверками и запланированными PostgreSQL triggers.
-- **Pickup:** отправитель и назначенный Courier подтверждают получение **всей партии** отдельно, двумя разными аккаунтами.
-- **Delivery:** Courier и Lab подтверждают **каждый контейнер отдельно**. Пробирки можно принимать только из контейнера со статусом `RECEIVED` и подтверждённым двусторонним handoff **либо с проверенным EXCEPTIONAL receipt evidence: два разных присутствующих сотрудника Lab, один LAB_MANAGER, ранее подтверждённый Pickup и отдельное решение REGIONAL_OPERATIONS**. Контейнеры, ещё находящиеся в пути или отклонённые, не мешают проверять содержимое уже полученных.
-- **Исключения:** только `MISSING` и `REJECTED` для SAMPLE/CONTAINER; справочник причин фиксирован. Проблема одного контейнера не блокирует успешную передачу остальных и не проставляет автоматически результаты их пробирок.
-- **Двухэтапное разрешение:** региональная роль `REGIONAL_OPERATIONS` предлагает `RETRY_DELIVERY` или `CLOSE_UNDELIVERED`; отдельный `LAB_MANAGER` принимающей лаборатории подтверждает/отклоняет. Только согласованное решение изменяет состояние контейнера.
-- **Закрытие:** при смешанном результате (часть получена, часть окончательно не доставлена) и завершённой поэкземплярной проверке полученных контейнеров — `COMPLETED_WITH_ISSUES`. Если ни один контейнер не получен и все окончательно закрыты — `CLOSED_UNDELIVERED`. Это явно зафиксированная производная техническая политика.
-- **Reopening:** LAB_MANAGER может без установленного срока повторно открыть завершённую приёмку с причиной и аудитом; история сохраняется.
-- **Offline:** PWA с очередями на нескольких устройствах, server-issued snapshot, 24h review, 90d полного replay + tombstones; конфликт только при изменении **релевантных** manifest/target Container/Handoff/Pickup/authorization зависимостей, а не чужих данных. До server sync передача **не состоялась в системе**; время устройства не является доказательством передачи.
-- **Аналитика:** UTC day/week, latest-state без двойного подсчёта reopening, полный vs частичный delivery duration; региональные агрегаты для Analyst. Отдельный Inbox read/unread через PostgreSQL + Celery best-effort, эскалация зависших этапов (4h/4h/24h).
-- **Платформа:** FastAPI modular monolith, PostgreSQL, Redis/Celery (best effort), Docker Compose, короткоживущие JWT/Argon2id, CI, pytest и observability.
-
-## История проектирования (не использовать как актуальный API контракт)
-
-Исходные и промежуточные документы сохраняются для объяснения эволюции требований:
-
-**Приоритет при противоречиях:** утверждённые решения v0.6.1 → нормативные v0.6.1 документы → неизменённая v0.6 база → ранние версии. **OPEN-01–04 закрыты и утверждены.** Других продуктовых approval-blockers для синтетического MVP нет; для реального медицинского внедрения нужна отдельная нормативная и организационная проверка. Перед реализацией расхождение между нормативным текстом и OpenAPI считается ошибкой проектирования, а не свободой реализации.
-
-## Статус и границы
-
-**Foundation / Stage A завершён:** typed runtime settings, async SQLAlchemy session, identity/scope schema, явный Alembic migration с проверкой drift, login с Argon2id и коротким identity-only JWT, проверка active memberships и scoped RBAC, `/health/live`, `/health/ready`, JSON request-correlated logs. Команды пользователя и scoped membership доступны оператору из backend CLI; проверки Foundation и Manifest описаны в [backend README](backend/README.md).
-Stage F добавляет receiving/reopen lifecycle с append-only revisions и PostgreSQL guards. Stage G добавляет migration `0009_stage_g_offline`, PHI-free snapshots, per-command replay/tombstones и Courier PWA; его финальная проверка прошла 185 backend tests, migration cycle, OpenAPI/app-role и web checks.
-
-**Stage H** adds stalled-case/analytics APIs, Inbox/Celery, Operations UI, structured request/worker logs and manual backup/load tooling. The release suite passed 193 backend tests, 11 Chromium E2E tests, web lint/unit/TypeScript/build, Ruff, Alembic drift check and Compose config; isolated browser/API and worker/Beat startup checks did not verify a production image, scheduled task or notification delivery.
-
-Все данные демонстрационные. Непрозрачные ссылки на ЛИС не гарантируют анонимность в реальном окружении. Перед реальным пилотом нужно отдельно подтвердить юридическую ответственность за физический контейнер, правила offline-разрешения, регламенты медицинской логистики, хранение данных, безопасность и процедуры восстановления.
-
-## Локальное инфраструктурное окружение
-
-```bash
-test -f .env || cp .env.example .env
-docker compose up -d
-docker compose ps
+```mermaid
+flowchart LR
+    S[Отправитель создает и запечатывает партию] --> P[Отправитель и курьер подтверждают Pickup]
+    P --> D{Для каждого контейнера}
+    D -->|Обычная передача| H[Курьер и лаборатория подтверждают Delivery]
+    D -->|Исключение| X[Два свидетеля Lab и отдельное решение региона]
+    H --> R[Лаборатория принимает пробирки и записывает результаты]
+    X --> R
+    R --> C[Лаборатория завершает приемку]
 ```
 
-PostgreSQL и Redis доступны только с локальной машины на `localhost:5432` и `localhost:6379`. Порты можно изменить в `.env`. PostgreSQL хранит данные в отдельном Docker volume `labtrack_dev_postgres_data`; Redis работает без постоянного хранилища.
+Pickup относится ко всей партии и требует двух разных участников. Delivery подтверждается отдельно для каждого контейнера. Исключительная приемка требует двух разных сотрудников целевой лаборатории, включая менеджера, и отдельного решения регионального оператора.
 
-Redis предусмотрен как broker/cache для будущих best-effort задач Celery и не является источником истины для бизнес-состояния.
+## Возможности
 
-Остановить сервисы, сохранив данные PostgreSQL:
+- Ролевые рабочие области Sender, Courier, Lab Operator и Lab Manager; полномочия ограничены организацией или регионом.
+- Прослеживаемость Shipment → Container → Sample, включая частичную доставку и историю результатов.
+- Контроль доступа, идемпотентные команды и аудит изменений.
+- Courier PWA с локальной очередью для работы без сети; команда становится системным событием только после проверки и синхронизации с сервером.
 
-```bash
-docker compose down
+| Роль | Зона ответственности |
+|---|---|
+| Sender | Формирует партию и подтверждает выдачу |
+| Courier | Подтверждает Pickup и доставляет контейнеры |
+| Lab Operator / Manager | Принимает контейнеры, записывает результаты и закрывает приемку |
+| Regional Operations | Рассматривает исключения в своем регионе |
+
+## Технологии
+
+FastAPI modular monolith, PostgreSQL для авторитетного состояния, Redis/Celery для best-effort уведомлений, React/TypeScript/Vite PWA и IndexedDB для очереди курьера.
+
+```mermaid
+flowchart LR
+    PWA[Web PWA] -->|API /api/v1| API[FastAPI]
+    PWA -->|офлайн очередь| IDB[(IndexedDB)]
+    API --> PG[(PostgreSQL)]
+    API -. best effort .-> RC[Redis / Celery]
 ```
 
-Миграции применяются отдельно из `backend/` командой `alembic upgrade head`. PostgreSQL owner из `POSTGRES_USER` используется только миграциями и тестовой очисткой; API подключается как `APP_POSTGRES_USER` и не владеет таблицами. Локальный `.env` содержит только параметры разработки и исключён из Git.
+## Документация
 
-## Backend scaffold
+- [Документы проекта](docs/README.md) — навигация и границы требований.
+- [Рабочие процессы](docs/workflows.md) — роли и подтверждения передачи.
+- [Архитектура](docs/architecture.md) · [Данные и целостность](docs/data-and-integrity.md).
+- [Offline-синхронизация](docs/offline-sync.md) · [API](docs/api.md).
+- [Локальная разработка](docs/development.md), [Backend](backend/README.md), [Web](web/README.md).
 
+Подробные документы v0.6.1 описывают утвержденные требования. В них отмечено, где текст нормативный, а где поведение реализовано; статическая OpenAPI-схема является черновиком, не полным контрактом runtime API.
