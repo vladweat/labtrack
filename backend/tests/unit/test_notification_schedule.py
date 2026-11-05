@@ -8,9 +8,7 @@ TASK_NAME = "app.workers.notifications.scan_stalled_notifications"
 
 def test_notification_scan_is_registered_once_at_the_five_minute_interval() -> None:
     scheduled_scans = [
-        entry
-        for entry in celery_app.conf.beat_schedule.values()
-        if entry.get("task") == TASK_NAME
+        entry for entry in celery_app.conf.beat_schedule.values() if entry.get("task") == TASK_NAME
     ]
 
     assert len(scheduled_scans) == 1

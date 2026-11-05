@@ -207,9 +207,7 @@ async def test_registered_scan_logs_and_reraises_a_persistence_failure(
     async def fail_persistence(session: AsyncSession, candidates: list[object]) -> int:
         raise SyntheticScanFailure("synthetic notification persistence failure")
 
-    monkeypatch.setattr(
-        notification_worker, "persist_stalled_notifications", fail_persistence
-    )
+    monkeypatch.setattr(notification_worker, "persist_stalled_notifications", fail_persistence)
     with caplog.at_level("ERROR", logger="app.workers.notifications"):
         with pytest.raises(
             SyntheticScanFailure, match="synthetic notification persistence failure"
