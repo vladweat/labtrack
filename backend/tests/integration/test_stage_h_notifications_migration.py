@@ -3,6 +3,7 @@
 import asyncio
 import os
 import subprocess
+import sys
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -281,7 +282,7 @@ def _run_alembic(
     arguments: list[str], cwd: Path, env: dict[str, str]
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [str(cwd / ".venv" / "bin" / "alembic"), *arguments],
+        [sys.executable, "-m", "alembic", *arguments],
         cwd=cwd,
         env=env,
         capture_output=True,
