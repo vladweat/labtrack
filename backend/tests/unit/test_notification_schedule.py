@@ -3,7 +3,6 @@
 from app.workers.celery_app import celery_app
 from app.workers.notifications import scan_stalled_notifications
 
-
 TASK_NAME = "app.workers.notifications.scan_stalled_notifications"
 
 
