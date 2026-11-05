@@ -339,9 +339,9 @@ async function installLabApiMock(page: Page, options: MockOptions) {
 }
 
 async function signIn(page: Page) {
-  await page.getByLabel('Email').fill(userProfile.email);
-  await page.getByLabel('Password').fill('test-password');
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByLabel('Электронная почта').fill(userProfile.email);
+  await page.getByLabel('Пароль').fill('test-password');
+  await page.getByRole('button', { name: 'Войти' }).click();
 }
 
 test('Lab Operator receives, records a result, reviews history, and completes receiving', async ({ page }) => {
@@ -352,31 +352,31 @@ test('Lab Operator receives, records a result, reviews history, and completes re
   const labTab = page.getByRole('button', { name: 'Лаборатория' });
   await expect(labTab).toBeVisible();
   await labTab.click();
-  await expect(page.getByRole('heading', { name: 'Lab workspace' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Рабочая область лаборатории' })).toBeVisible();
   await expect(page.getByText('SHP-LAB-001', { exact: true })).toBeVisible();
 
-  await page.getByLabel('Receipt container code').fill('CNT-LAB-001');
-  await page.getByRole('button', { name: 'Confirm receipt' }).click();
-  await expect(page.getByText('RECEIVED', { exact: true })).toBeVisible();
+  await page.getByLabel('Код контейнера при приёмке').fill('CNT-LAB-001');
+  await page.getByRole('button', { name: 'Подтвердить приёмку' }).click();
+  await expect(page.locator('.lab-container-card .status-badge').first()).toHaveText('Принят');
 
-  await page.getByRole('button', { name: 'Complete receiving' }).click();
-  await expect(page.getByRole('alert')).toContainText('Every item in a received container must have a result');
-  await expect(page.getByText('RECEIVING', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Завершить приёмку' }).click();
+  await expect(page.getByRole('alert')).toContainText('Укажите результат для каждого образца в принятом контейнере.');
+  await expect(page.getByTestId('lab-shipment-status')).toHaveText('Приёмка');
 
-  const resultSelect = page.getByLabel('Result for SMP-LAB-001');
+  const resultSelect = page.getByLabel('Результат для образца SMP-LAB-001');
   await resultSelect.selectOption('MISSING');
-  const reasonSelect = page.getByLabel('Reason for SMP-LAB-001');
+  const reasonSelect = page.getByLabel('Причина для образца SMP-LAB-001');
   await expect(reasonSelect.locator('option:not([value=""])')).toHaveCount(1);
   await reasonSelect.selectOption('SAMPLE_MISSING');
-  await page.getByLabel('Comment for SMP-LAB-001').fill('Synthetic package note');
-  await page.getByRole('button', { name: 'Record result for SMP-LAB-001' }).click();
-  await expect(page.getByText('Result: MISSING · SAMPLE_MISSING', { exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Receiving history' })).toBeVisible();
-  await expect(page.getByText(`Sample item ${itemId}`, { exact: true })).toBeVisible();
+  await page.getByLabel('Комментарий к образцу SMP-LAB-001').fill('Synthetic package note');
+  await page.getByRole('button', { name: 'Сохранить результат для SMP-LAB-001' }).click();
+  await expect(page.getByText('Результат: Отсутствует · Образец отсутствует', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'История приёмки' })).toBeVisible();
+  await expect(page.getByText(`Образец: ${itemId}`, { exact: true })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Complete receiving' }).click();
-  await expect(page.getByText('COMPLETED_WITH_ISSUES', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Reopen receiving' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Завершить приёмку' }).click();
+  await expect(page.getByTestId('lab-shipment-status')).toHaveText('Завершено с замечаниями');
+  await expect(page.getByRole('button', { name: 'Открыть повторно' })).toHaveCount(0);
   expect(api.mutations.map((entry) => `${entry.method} ${entry.path}`)).toEqual([
     `POST /api/v1/shipments/${shipmentId}/containers/${containerId}/handoffs/delivery/confirm-receipt`,
     `POST /api/v1/shipments/${shipmentId}/receiving/complete`,
@@ -393,17 +393,17 @@ test('Lab Manager can receive and reopen with a reason but cannot edit results o
   await signIn(page);
   await page.getByRole('button', { name: 'Лаборатория' }).click();
 
-  await expect(page.getByRole('button', { name: 'Reopen receiving' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Complete receiving' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: /Record result/ })).toHaveCount(0);
-  await page.getByLabel('Reopen reason').fill('Retest after instrument review');
-  await page.getByRole('button', { name: 'Reopen receiving' }).click();
-  await expect(page.getByText('RECEIVING', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Открыть повторно' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Завершить приёмку' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Сохранить результат/ })).toHaveCount(0);
+  await page.getByLabel('Причина повторного открытия').fill('Retest after instrument review');
+  await page.getByRole('button', { name: 'Открыть повторно' }).click();
+  await expect(page.getByTestId('lab-shipment-status')).toHaveText('Приёмка');
   expect(api.mutations.at(-1)?.path).toBe(`/api/v1/shipments/${shipmentId}/receiving/reopen`);
   expect(api.mutations.at(-1)?.body).toEqual({ reason: 'Retest after instrument review' });
   expect(api.mutations.at(-1)?.idempotencyKey?.length).toBeTruthy();
-  await expect(page.getByText('Session 2 · OPEN')).toBeVisible();
-  await expect(page.getByText('Reopen reason: Synthetic manager reopen')).toBeVisible();
+  await expect(page.getByText('Сеанс 2 · Открыта')).toBeVisible();
+  await expect(page.getByText('Причина повторного открытия: Synthetic manager reopen')).toBeVisible();
 });
 
 test('Lab Manager can confirm receipt without receiving result controls', async ({ page }) => {
@@ -412,12 +412,12 @@ test('Lab Manager can confirm receipt without receiving result controls', async 
   await signIn(page);
   await page.getByRole('button', { name: 'Лаборатория' }).click();
 
-  await expect(page.getByLabel('Receipt container code')).toBeVisible();
-  await expect(page.getByRole('button', { name: /Record result/ })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Complete receiving' })).toHaveCount(0);
-  await page.getByLabel('Receipt container code').fill('CNT-LAB-001');
-  await page.getByRole('button', { name: 'Confirm receipt' }).click();
-  await expect(page.getByText('RECEIVED', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('Код контейнера при приёмке')).toBeVisible();
+  await expect(page.getByRole('button', { name: /Сохранить результат/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Завершить приёмку' })).toHaveCount(0);
+  await page.getByLabel('Код контейнера при приёмке').fill('CNT-LAB-001');
+  await page.getByRole('button', { name: 'Подтвердить приёмку' }).click();
+  await expect(page.locator('.lab-container-card .status-badge').first()).toHaveText('Принят');
   expect(api.mutations).toHaveLength(1);
   expect(api.mutations[0]?.idempotencyKey?.length).toBeTruthy();
 });
@@ -444,17 +444,17 @@ test('Lab workspace loads older receiving revisions by offset and refreshes the 
   await signIn(page);
   await page.getByRole('button', { name: 'Лаборатория' }).click();
 
-  await expect(page.getByText('Showing 100 of 205 revisions')).toBeVisible();
-  await expect(page.getByText('Comment: History marker 101', { exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: 'Load older revisions' }).click();
-  await expect(page.getByText('Showing 200 of 205 revisions')).toBeVisible();
-  await expect(page.getByText('Comment: History marker 101', { exact: true })).toBeVisible();
+  await expect(page.getByText('Показано записей: 100 из 205')).toBeVisible();
+  await expect(page.getByText('Комментарий: History marker 101', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Загрузить более ранние изменения' }).click();
+  await expect(page.getByText('Показано записей: 200 из 205')).toBeVisible();
+  await expect(page.getByText('Комментарий: History marker 101', { exact: true })).toBeVisible();
   expect(api.historyRequests).toContainEqual({ limit: 100, offset: 100 });
 
-  await page.getByRole('button', { name: 'Record result for SMP-LAB-001' }).click();
-  await expect(page.getByText('Showing 201 of 206 revisions')).toBeVisible();
-  await expect(page.getByText('Comment: History marker 101', { exact: true })).toBeVisible();
-  await expect(page.getByText('— → ACCEPTED', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Сохранить результат для SMP-LAB-001' }).click();
+  await expect(page.getByText('Показано записей: 201 из 206')).toBeVisible();
+  await expect(page.getByText('Комментарий: History marker 101', { exact: true })).toBeVisible();
+  await expect(page.getByText('Не указан → Принят', { exact: true })).toBeVisible();
   expect(api.historyRequests.at(-1)).toEqual({ limit: 100, offset: 0 });
 });
 
@@ -469,25 +469,25 @@ test('Lab workspace resumes sequential history offsets after more than 100 revis
   await signIn(page);
   await page.getByRole('button', { name: 'Лаборатория' }).click();
 
-  await expect(page.getByText('Showing 100 of 205 revisions')).toBeVisible();
-  await page.getByRole('button', { name: 'Load older revisions' }).click();
-  await expect(page.getByText('Showing 200 of 205 revisions')).toBeVisible();
+  await expect(page.getByText('Показано записей: 100 из 205')).toBeVisible();
+  await page.getByRole('button', { name: 'Загрузить более ранние изменения' }).click();
+  await expect(page.getByText('Показано записей: 200 из 205')).toBeVisible();
   expect(api.historyRequests.map(({ offset }) => offset)).toEqual([0, 100]);
 
   api.addSyntheticRevisions(151);
-  await page.getByLabel('Result for SMP-LAB-001').selectOption('MISSING');
-  await page.getByLabel('Reason for SMP-LAB-001').selectOption('SAMPLE_MISSING');
-  await page.getByLabel('Comment for SMP-LAB-001').fill('Post-refresh marker');
-  await page.getByRole('button', { name: 'Record result for SMP-LAB-001' }).click();
-  await expect(page.getByText('Showing 300 of 357 revisions')).toBeVisible();
-  await expect(page.getByText('Comment: Post-refresh marker', { exact: true })).toBeVisible();
+  await page.getByLabel('Результат для образца SMP-LAB-001').selectOption('MISSING');
+  await page.getByLabel('Причина для образца SMP-LAB-001').selectOption('SAMPLE_MISSING');
+  await page.getByLabel('Комментарий к образцу SMP-LAB-001').fill('Post-refresh marker');
+  await page.getByRole('button', { name: 'Сохранить результат для SMP-LAB-001' }).click();
+  await expect(page.getByText('Показано записей: 300 из 357')).toBeVisible();
+  await expect(page.getByText('Комментарий: Post-refresh marker', { exact: true })).toBeVisible();
 
-  const loadOlderButton = page.getByRole('button', { name: 'Load older revisions' });
+  const loadOlderButton = page.getByRole('button', { name: 'Загрузить более ранние изменения' });
   await loadOlderButton.click();
   await expect(loadOlderButton).toBeEnabled();
   await expect.poll(() => api.historyRequests.map(({ offset }) => offset))
     .toEqual([0, 100, 0, 100]);
-  await expect(page.getByText('Showing 352 of 357 revisions')).toBeVisible();
+  await expect(page.getByText('Показано записей: 352 из 357')).toBeVisible();
 
   await loadOlderButton.click();
   await expect(loadOlderButton).toBeEnabled();
@@ -495,7 +495,7 @@ test('Lab workspace resumes sequential history offsets after more than 100 revis
     .toEqual([0, 100, 0, 100, 200]);
 
   await loadOlderButton.click();
-  await expect(page.getByText('Showing 357 of 357 revisions')).toBeVisible();
+  await expect(page.getByText('Показано записей: 357 из 357')).toBeVisible();
   await expect(loadOlderButton).toHaveCount(0);
   expect(api.historyRequests.map(({ offset }) => offset)).toEqual([0, 100, 0, 100, 200, 300]);
 
@@ -505,7 +505,7 @@ test('Lab workspace resumes sequential history offsets after more than 100 revis
     .locator('li')
     .allTextContents();
   const renderedComments = renderedRevisions
-    .map((revision) => revision.match(/Comment: (.+?)Changed by/)?.[1])
+    .map((revision) => revision.match(/Комментарий: (.+?)Изменил/)?.[1])
     .filter((comment): comment is string => Boolean(comment));
   const expectedComments = [
     'Post-refresh marker',

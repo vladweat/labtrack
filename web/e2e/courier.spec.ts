@@ -215,36 +215,36 @@ function makeResult(
 }
 
 async function signIn(page: Page, email = primaryUser.email) {
-  await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password').fill('test-password');
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByLabel('Электронная почта').fill(email);
+  await page.getByLabel('Пароль').fill('test-password');
+  await page.getByRole('button', { name: 'Войти' }).click();
 }
 
 async function loadShipment(page: Page) {
-  await page.getByLabel('Shipment ID').fill(shipmentId);
-  await page.getByRole('button', { name: 'Load assigned Shipment' }).click();
+  await page.getByLabel('Идентификатор отправки').fill(shipmentId);
+  await page.getByRole('button', { name: 'Загрузить назначенную отправку' }).click();
   await expect(
-    page.getByRole('list', { name: 'Sealed container codes' }).getByText('BX-101', { exact: true }),
+    page.getByRole('list', { name: 'Коды опечатанных контейнеров' }).getByText('BX-101', { exact: true }),
   ).toBeVisible();
 }
 
 async function queuePickup(page: Page) {
-  await page.getByLabel('Confirm all sealed container codes').fill(codes.join(', '));
-  await page.getByRole('button', { name: 'Queue Pickup confirmation' }).click();
-  await expect(page.getByText(/Local pending/).first()).toBeVisible();
+  await page.getByLabel('Введите коды всех опечатанных контейнеров').fill(codes.join(', '));
+  await page.getByRole('button', { name: 'Поставить подтверждение забора в очередь' }).click();
+  await expect(page.getByText(/Ожидает синхронизации/).first()).toBeVisible();
 }
 
 async function switchAccount(page: Page) {
-  await page.getByRole('button', { name: 'Switch account' }).click();
+  await page.getByRole('button', { name: 'Сменить учётную запись' }).click();
   const accountLogin = page.getByRole('dialog');
-  await accountLogin.getByLabel('New account email').fill(secondUser.email);
-  await accountLogin.getByLabel('New account password').fill('test-password');
-  await accountLogin.getByRole('button', { name: 'Continue to account' }).click();
+  await accountLogin.getByLabel('Электронная почта новой учётной записи').fill(secondUser.email);
+  await accountLogin.getByLabel('Пароль новой учётной записи').fill('test-password');
+  await accountLogin.getByRole('button', { name: 'Продолжить' }).click();
   await page
     .getByRole('dialog')
-    .getByRole('button', { name: 'Switch account and clear local data' })
+    .getByRole('button', { name: 'Сменить учётную запись и очистить данные' })
     .click();
-  await expect(page.getByRole('heading', { name: 'Welcome, Courier B' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Добро пожаловать, Courier B' })).toBeVisible();
 }
 
 async function inspectDatabase(page: Page) {
@@ -301,7 +301,7 @@ test('loads the cached PWA shell offline and never caches API responses', async 
   const mock = await installApiMock(page);
   await page.goto('/');
 
-  await expect(page.getByRole('heading', { name: 'Courier Offline' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Курьер офлайн' })).toBeVisible();
   await expect
     .poll(() => page.evaluate(() => navigator.serviceWorker.getRegistration().then(Boolean)))
     .toBe(true);
@@ -317,7 +317,7 @@ test('loads the cached PWA shell offline and never caches API responses', async 
     }>;
   }, manifestUrl);
   expect(webManifest.display).toBe('standalone');
-  expect(webManifest.name).toContain('Courier');
+  expect(webManifest.name).toContain('курьер');
   expect(webManifest.start_url).toBe('/');
   expect(webManifest.icons.map((icon) => icon.sizes)).toEqual(
     expect.arrayContaining(['192x192', '512x512']),
@@ -353,7 +353,7 @@ test('loads the cached PWA shell offline and never caches API responses', async 
   expect(apiRequestFailed).toBe(true);
   expect(mock.authMeRequests).toHaveLength(1);
   await page.reload();
-  await expect(page.getByRole('heading', { name: 'Courier Offline' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Курьер офлайн' })).toBeVisible();
 });
 
 test('queues Pickup locally while offline without changing server custody', async ({
@@ -370,7 +370,7 @@ test('queues Pickup locally while offline without changing server custody', asyn
 
   expect(mock.serverStatus).toBe('READY_FOR_PICKUP');
   expect(mock.syncRequests).toHaveLength(0);
-  await expect(page.getByRole('status')).toContainText(/Server custody is unchanged until synchronization/);
+  await expect(page.getByRole('status')).toContainText(/Статус передачи на сервере не изменился/);
   const records = (await inspectDatabase(page))['commands'] as Array<{
     command: { action: string };
   }>;
@@ -396,7 +396,7 @@ test('retains the same user queue across reload and reauthentication without sto
   await page.reload();
   await signIn(page);
 
-  await expect(page.getByText(/Local pending/).first()).toBeVisible();
+  await expect(page.getByText(/Ожидает синхронизации/).first()).toBeVisible();
   const afterReload = await inspectDatabase(page);
   expect((afterReload.commands as Array<{ command: unknown }>)[0].command).toEqual(savedCommand);
   expect(JSON.stringify(afterReload)).not.toContain(`test-jwt-${primaryUser.id}`);
@@ -441,18 +441,18 @@ test('links Delivery to the queued Pickup and saves each outcome before showing 
   await loadShipment(page);
   await context.setOffline(true);
   await queuePickup(page);
-  await page.getByLabel('Container to deliver').selectOption(containerIds[0]);
-  await page.getByLabel('Link this delivery to my queued Pickup').check();
-  await page.getByRole('button', { name: 'Queue one-container Delivery' }).click();
-  await expect(page.getByText(/Local pending/).nth(1)).toBeVisible();
+  await page.getByLabel('Контейнер для доставки').selectOption(containerIds[0]);
+  await page.getByLabel('Связать доставку с ожидающим подтверждением забора').check();
+  await page.getByRole('button', { name: 'Поставить доставку одного контейнера в очередь' }).click();
+  await expect(page.getByText(/Ожидает синхронизации/).nth(1)).toBeVisible();
   await page.evaluate(() => {
     const writeOrder = (window as Window & { __idbWriteOrder?: string[] }).__idbWriteOrder;
     if (writeOrder) writeOrder.length = 0;
   });
   await context.setOffline(false);
 
-  await page.getByRole('button', { name: 'Sync pending commands' }).click();
-  await expect(page.getByText(/Server applied/).first()).toBeVisible();
+  await page.getByRole('button', { name: 'Синхронизировать команды' }).click();
+  await expect(page.getByText(/Применено на сервере/).first()).toBeVisible();
   expect(mock.syncRequests).toHaveLength(1);
   const [pickup, delivery] = mock.syncRequests[0];
   expect(pickup.action).toBe('COURIER_CONFIRM_PICKUP');
@@ -492,11 +492,11 @@ test('replays the exact command ID and payload after a lost sync response', asyn
   const beforeSync = (await inspectDatabase(page)).commands as Array<{
     command: Record<string, unknown>;
   }>;
-  await page.getByRole('button', { name: 'Sync pending commands' }).click();
-  await expect(page.getByText(/response was not received|retry sends the same command/i)).toBeVisible();
-  await expect(page.getByText(/Local pending/).first()).toBeVisible();
-  await page.getByRole('button', { name: 'Sync pending commands' }).click();
-  await expect(page.getByText(/Server applied/).first()).toBeVisible();
+  await page.getByRole('button', { name: 'Синхронизировать команды' }).click();
+  await expect(page.getByText(/Ответ сервера не получен|повторная отправка использует тот же идентификатор/i)).toBeVisible();
+  await expect(page.getByText(/Ожидает синхронизации/).first()).toBeVisible();
+  await page.getByRole('button', { name: 'Синхронизировать команды' }).click();
+  await expect(page.getByText(/Применено на сервере/).first()).toBeVisible();
 
   expect(mock.syncRequests).toHaveLength(2);
   expect(mock.syncRequests[1]).toEqual(mock.syncRequests[0]);
@@ -512,10 +512,10 @@ test('explains server review when the snapshot is older than 24 hours', async ({
   await page.goto('/');
   await signIn(page);
   await loadShipment(page);
-  await expect(page.getByText(/more than 24 hours old/i)).toBeVisible();
+  await expect(page.getByText(/больше 24 часов/)).toBeVisible();
   await queuePickup(page);
-  await page.getByRole('button', { name: 'Sync pending commands' }).click();
-  await expect(page.getByText(/Review required.*older than 24 hours/i)).toBeVisible();
+  await page.getByRole('button', { name: 'Синхронизировать команды' }).click();
+  await expect(page.getByText(/Требуется проверка.*Снимок старше 24 часов/)).toBeVisible();
 });
 
 test('warns before logout and clears the user’s local courier data', async ({ page }) => {
@@ -525,11 +525,11 @@ test('warns before logout and clears the user’s local courier data', async ({ 
   await loadShipment(page);
   await queuePickup(page);
 
-  await page.getByRole('button', { name: 'Log out' }).click();
+  await page.getByRole('button', { name: 'Выйти' }).click();
   const dialog = page.getByRole('dialog');
-  await expect(dialog).toContainText(/unsynced local command(?:s)?.*permanently deleted/i);
-  await dialog.getByRole('button', { name: 'Log out and clear local data' }).click();
-  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
+  await expect(dialog).toContainText(/безвозвратно удалены несинхронизированные команды/i);
+  await dialog.getByRole('button', { name: 'Выйти и очистить данные устройства' }).click();
+  await expect(page.getByRole('button', { name: 'Войти' })).toBeVisible();
 
   const records = await inspectDatabase(page);
   expect(records.commands).toHaveLength(0);
@@ -549,8 +549,8 @@ test('warns and purges the previous account queue before same-device account cha
 
   await signIn(page, secondUser.email);
   const dialog = page.getByRole('dialog');
-  await expect(dialog).toContainText(/saved courier data.*will be cleared/i);
-  await dialog.getByRole('button', { name: 'Switch account and clear local data' }).click();
+  await expect(dialog).toContainText(/Данные курьера .* будут удалены с этого устройства/);
+  await dialog.getByRole('button', { name: 'Сменить учётную запись и очистить данные' }).click();
   await expect(page.getByText('Courier B', { exact: true })).toBeVisible();
 
   const records = await inspectDatabase(page);
@@ -570,22 +570,22 @@ test('canceling account change keeps the old session and blocks background sync 
   await queuePickup(page);
   await context.setOffline(false);
 
-  await page.getByRole('button', { name: 'Switch account' }).click();
+  await page.getByRole('button', { name: 'Сменить учётную запись' }).click();
   const accountLogin = page.getByRole('dialog');
-  await expect(accountLogin).toContainText(/current Courier session and device queue stay active/i);
-  await accountLogin.getByLabel('New account email').fill('unknown@example.test');
-  await accountLogin.getByLabel('New account password').fill('test-password');
-  await accountLogin.getByRole('button', { name: 'Continue to account' }).click();
-  await expect(accountLogin.getByRole('alert')).toContainText('Invalid email or password');
-  await expect(page.getByRole('heading', { name: 'Welcome, Courier A' })).toBeVisible();
-  await accountLogin.getByLabel('New account email').fill(secondUser.email);
-  await accountLogin.getByLabel('New account password').fill('test-password');
-  await accountLogin.getByRole('button', { name: 'Continue to account' }).click();
+  await expect(accountLogin).toContainText(/Текущий сеанс курьера и очередь команд на устройстве останутся активными/);
+  await accountLogin.getByLabel('Электронная почта новой учётной записи').fill('unknown@example.test');
+  await accountLogin.getByLabel('Пароль новой учётной записи').fill('test-password');
+  await accountLogin.getByRole('button', { name: 'Продолжить' }).click();
+  await expect(accountLogin.getByRole('alert')).toContainText('Неверный адрес электронной почты или пароль.');
+  await expect(page.getByRole('heading', { name: 'Добро пожаловать, Courier A' })).toBeVisible();
+  await accountLogin.getByLabel('Электронная почта новой учётной записи').fill(secondUser.email);
+  await accountLogin.getByLabel('Пароль новой учётной записи').fill('test-password');
+  await accountLogin.getByRole('button', { name: 'Продолжить' }).click();
 
   const confirmation = page.getByRole('dialog');
-  await expect(confirmation).toContainText(/saved courier data.*will be cleared/i);
-  await expect(page.getByRole('heading', { name: 'Welcome, Courier A' })).toBeVisible();
-  const syncButton = page.getByRole('button', { name: 'Sync pending commands' });
+  await expect(confirmation).toContainText(/Данные курьера .* будут удалены с этого устройства/);
+  await expect(page.getByRole('heading', { name: 'Добро пожаловать, Courier A' })).toBeVisible();
+  const syncButton = page.getByRole('button', { name: 'Синхронизировать команды' });
   await expect(syncButton).toBeEnabled();
 
   let mouseWasBlocked = false;
@@ -604,10 +604,10 @@ test('canceling account change keeps the old session and blocks background sync 
   expect(backgroundButtonReceivedFocus).toBe(false);
   await page.keyboard.press('Enter');
   await expect(confirmation).not.toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Welcome, Courier A' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Добро пожаловать, Courier A' })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Sync pending commands' }).click();
-  await expect(page.getByText(/Server applied/).first()).toBeVisible();
+  await page.getByRole('button', { name: 'Синхронизировать команды' }).click();
+  await expect(page.getByText(/Применено на сервере/).first()).toBeVisible();
   expect(mock.syncRequests).toHaveLength(1);
   expect(mock.syncAuthTokens).toEqual([`Bearer test-jwt-${primaryUser.id}`]);
   expect(mock.syncAuthTokens).not.toContain(`Bearer test-jwt-${secondUser.id}`);
@@ -638,25 +638,25 @@ test('a failed local purge leaves the previous session and queue active', async 
   await signIn(page, primaryUser.email);
   await loadShipment(page);
   await queuePickup(page);
-  await page.getByRole('button', { name: 'Switch account' }).click();
+  await page.getByRole('button', { name: 'Сменить учётную запись' }).click();
   const accountLogin = page.getByRole('dialog');
-  await accountLogin.getByLabel('New account email').fill(secondUser.email);
-  await accountLogin.getByLabel('New account password').fill('test-password');
-  await accountLogin.getByRole('button', { name: 'Continue to account' }).click();
+  await accountLogin.getByLabel('Электронная почта новой учётной записи').fill(secondUser.email);
+  await accountLogin.getByLabel('Пароль новой учётной записи').fill('test-password');
+  await accountLogin.getByRole('button', { name: 'Продолжить' }).click();
 
   await page.evaluate(() => {
     (window as Window & { __failNextPurge?: boolean }).__failNextPurge = true;
   });
   const confirmation = page.getByRole('dialog');
-  await confirmation.getByRole('button', { name: 'Switch account and clear local data' }).click();
-  await expect(confirmation).toContainText(/could not clear.*current account and queue are still active/i);
-  await expect(page.getByRole('heading', { name: 'Welcome, Courier A' })).toBeVisible();
-  await expect(page.getByText(/Local pending/).first()).toBeVisible();
+  await confirmation.getByRole('button', { name: 'Сменить учётную запись и очистить данные' }).click();
+  await expect(confirmation).toContainText(/Не удалось очистить данные на этом устройстве\. Текущая учётная запись и очередь остаются активными/);
+  await expect(page.getByRole('heading', { name: 'Добро пожаловать, Courier A' })).toBeVisible();
+  await expect(page.getByText(/Ожидает синхронизации/).first()).toBeVisible();
   expect((await inspectDatabase(page)).commands).toHaveLength(1);
 
-  await confirmation.getByRole('button', { name: 'Keep previous account' }).click();
-  await page.getByRole('button', { name: 'Sync pending commands' }).click();
-  await expect(page.getByText(/Server applied/).first()).toBeVisible();
+  await confirmation.getByRole('button', { name: 'Оставить прежнюю учётную запись' }).click();
+  await page.getByRole('button', { name: 'Синхронизировать команды' }).click();
+  await expect(page.getByText(/Применено на сервере/).first()).toBeVisible();
   expect(mock.syncAuthTokens).toEqual([`Bearer test-jwt-${primaryUser.id}`]);
 });
 
@@ -673,7 +673,7 @@ test('keeps queues separate between browser installations on one device', async 
     await queuePickup(firstPage);
 
     await signIn(secondPage);
-    await expect(secondPage.getByText(/No commands are queued on this device/)).toBeVisible();
+    await expect(secondPage.getByText(/На этом устройстве нет команд в очереди/)).toBeVisible();
     expect((await inspectDatabase(firstPage)).commands).toHaveLength(1);
     expect((await inspectDatabase(secondPage)).commands).toHaveLength(0);
   } finally {
@@ -706,13 +706,13 @@ for (const useStorageFallback of [false, true]) {
 
         await switchAccount(firstPage);
 
-        await expect(secondPage.getByRole('button', { name: 'Sign in' })).toBeVisible();
-        await expect(secondPage.getByRole('heading', { name: 'Welcome, Courier A' })).toHaveCount(0);
+        await expect(secondPage.getByRole('button', { name: 'Войти' })).toBeVisible();
+        await expect(secondPage.getByRole('heading', { name: 'Добро пожаловать, Courier A' })).toHaveCount(0);
         await expect(
-          secondPage.getByRole('button', { name: 'Sync pending commands' }),
+          secondPage.getByRole('button', { name: 'Синхронизировать команды' }),
         ).toHaveCount(0);
         await expect(
-          secondPage.getByRole('button', { name: 'Queue Pickup confirmation' }),
+          secondPage.getByRole('button', { name: 'Поставить подтверждение забора в очередь' }),
         ).toHaveCount(0);
         expect(firstMock.syncRequests).toHaveLength(0);
         expect(secondMock.syncRequests).toHaveLength(0);
@@ -734,11 +734,11 @@ test('rejects a queued command after the shared active account changed', async (
 
   // Model another tab switching the shared IndexedDB account before this stale tab writes.
   await changeActiveUserMarker(page, secondUser.id);
-  await page.getByLabel('Confirm all sealed container codes').fill(codes.join(', '));
-  await page.getByRole('button', { name: 'Queue Pickup confirmation' }).click();
+  await page.getByLabel('Введите коды всех опечатанных контейнеров').fill(codes.join(', '));
+  await page.getByRole('button', { name: 'Поставить подтверждение забора в очередь' }).click();
 
   expect((await inspectDatabase(page)).commands).toHaveLength(0);
-  await expect(page.locator('.page-alert')).toContainText(/active account changed/i);
+  await expect(page.locator('.page-alert')).toContainText('Не удалось добавить команду в очередь.');
 });
 
 test('does not persist a Shipment snapshot returned after the active account changed', async ({ page }) => {
@@ -746,7 +746,7 @@ test('does not persist a Shipment snapshot returned after the active account cha
   await page.goto('/');
   await signIn(page, primaryUser.email);
 
-  await page.getByLabel('Shipment ID').fill(shipmentId);
+  await page.getByLabel('Идентификатор отправки').fill(shipmentId);
   const loadButton = page.locator('.load-form button');
   const loadRequest = loadButton.click();
   await mock.manifestRequestStarted;
@@ -766,11 +766,11 @@ test('does not persist sync outcomes returned after the active account changed',
   await loadShipment(page);
   await queuePickup(page);
 
-  await page.getByRole('button', { name: 'Sync pending commands' }).click();
+  await page.getByRole('button', { name: 'Синхронизировать команды' }).click();
   await mock.syncRequestStarted;
   await changeActiveUserMarker(page, secondUser.id);
   mock.releaseSyncResponse();
-  await expect(page.getByRole('button', { name: 'Sync pending commands' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Синхронизировать команды' })).toBeEnabled();
 
   const records = await inspectDatabase(page);
   expect(mock.syncRequests).toHaveLength(1);
@@ -789,8 +789,8 @@ test('does not start synchronization when the shared active account no longer ma
   await queuePickup(page);
 
   await changeActiveUserMarker(page, secondUser.id);
-  await page.getByRole('button', { name: 'Sync pending commands' }).click();
-  await expect(page.getByRole('button', { name: 'Sync pending commands' })).toBeEnabled();
+  await page.getByRole('button', { name: 'Синхронизировать команды' }).click();
+  await expect(page.getByRole('button', { name: 'Синхронизировать команды' })).toBeEnabled();
 
   expect(mock.syncRequests).toHaveLength(0);
   const records = await inspectDatabase(page);
@@ -806,15 +806,15 @@ test('does not purge a previous account after another tab already changed the ac
   await signIn(page, primaryUser.email);
   await loadShipment(page);
   await queuePickup(page);
-  await page.getByRole('button', { name: 'Switch account' }).click();
-  await page.getByLabel('New account email').fill(secondUser.email);
-  await page.getByLabel('New account password').fill('test-password');
-  await page.getByRole('button', { name: 'Continue to account' }).click();
+  await page.getByRole('button', { name: 'Сменить учётную запись' }).click();
+  await page.getByLabel('Электронная почта новой учётной записи').fill(secondUser.email);
+  await page.getByLabel('Пароль новой учётной записи').fill('test-password');
+  await page.getByRole('button', { name: 'Продолжить' }).click();
 
   await changeActiveUserMarker(page, secondUser.id);
   const confirmation = page.getByRole('dialog');
-  await confirmation.getByRole('button', { name: 'Switch account and clear local data' }).click();
+  await confirmation.getByRole('button', { name: 'Сменить учётную запись и очистить данные' }).click();
 
-  await expect(confirmation).toContainText(/could not clear.*current account and queue are still active/i);
+  await expect(confirmation).toContainText(/Не удалось очистить данные на этом устройстве\. Текущая учётная запись и очередь остаются активными/);
   expect((await inspectDatabase(page)).commands).toHaveLength(1);
 });

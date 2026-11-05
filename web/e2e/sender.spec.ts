@@ -248,9 +248,9 @@ async function installSecondTabApiMock(page: Page) {
 }
 
 async function signInAsSender(page: Page) {
-  await page.getByLabel('Email').fill(senderUser.email);
-  await page.getByLabel('Password').fill('test-password');
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByLabel('Электронная почта').fill(senderUser.email);
+  await page.getByLabel('Пароль').fill('test-password');
+  await page.getByRole('button', { name: 'Войти' }).click();
 }
 
 test('Sender can prepare and release a Shipment using server returned state', async ({ page }) => {
@@ -261,29 +261,29 @@ test('Sender can prepare and release a Shipment using server returned state', as
   const senderTab = page.getByRole('button', { name: 'Отправитель' });
   await expect(senderTab).toBeVisible();
   await senderTab.click();
-  await expect(page.getByRole('heading', { name: 'Sender workspace' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Рабочая область отправителя' })).toBeVisible();
 
-  await page.getByLabel('Material type').selectOption('BLOOD');
-  await page.getByRole('button', { name: 'Create sample' }).click();
+  await page.getByLabel('Тип материала').selectOption('BLOOD');
+  await page.getByRole('button', { name: 'Создать образец' }).click();
   await expect(page.getByText('SMP-LOCAL-001', { exact: true })).toBeVisible();
 
   const expectedDelivery = new Date(Date.now() + 86_400_000).toISOString().slice(0, 16);
-  await page.getByLabel('Sender organization').selectOption(senderOrgId);
-  await page.getByLabel('Destination laboratory').selectOption(destinationOrgId);
-  await page.getByLabel('Expected delivery').fill(expectedDelivery);
-  await page.getByRole('button', { name: 'Create draft Shipment' }).click();
-  await expect(page.getByRole('heading', { name: 'Shipment SHP-LOCAL-001' })).toBeVisible();
+  await page.getByLabel('Организация отправителя', { exact: true }).selectOption(senderOrgId);
+  await page.getByLabel('Лаборатория-получатель').selectOption(destinationOrgId);
+  await page.getByLabel('Ожидаемая дата доставки').fill(expectedDelivery);
+  await page.getByRole('button', { name: 'Создать черновик отправки' }).click();
+  await expect(page.getByRole('heading', { name: 'Отправка SHP-LOCAL-001' })).toBeVisible();
 
-  await page.getByLabel('Courier').selectOption(courierId);
-  await page.getByRole('button', { name: 'Assign Courier' }).click();
-  await page.getByRole('button', { name: 'Add container' }).click();
-  await expect(page.getByRole('list', { name: 'Shipment containers' }).getByText('CNT-LOCAL-001', { exact: true })).toBeVisible();
-  await page.getByLabel('Sample to add').selectOption(sampleId);
-  await page.getByRole('button', { name: 'Add sample to container' }).click();
-  await page.getByRole('button', { name: 'Seal Shipment' }).click();
+  await page.getByLabel('Курьер').selectOption(courierId);
+  await page.getByRole('button', { name: 'Назначить курьера' }).click();
+  await page.getByRole('button', { name: 'Добавить контейнер' }).click();
+  await expect(page.getByRole('list', { name: 'Контейнеры отправки' }).getByText('CNT-LOCAL-001', { exact: true })).toBeVisible();
+  await page.getByLabel('Образец для добавления').selectOption(sampleId);
+  await page.getByRole('button', { name: 'Добавить образец в контейнер' }).click();
+  await page.getByRole('button', { name: 'Опечатать отправку' }).click();
   await expect(page.getByText('Готово к забору', { exact: true })).toBeVisible();
 
-  await page.getByRole('button', { name: 'Release Pickup' }).click();
+  await page.getByRole('button', { name: 'Разрешить забор' }).click();
   await expect(page.getByText('Ожидает забора', { exact: true })).toBeVisible();
   expect(api.mutationRequests.map((request) => `${request.method} ${request.path}`)).toEqual([
     'POST /api/v1/samples',
@@ -304,10 +304,10 @@ test('Sender lists do not offer another organization and render a masked 404', a
   await signInAsSender(page);
   await page.getByRole('button', { name: 'Отправитель' }).click();
 
-  const senderOptions = page.getByLabel('Sender organization').locator('option');
+  const senderOptions = page.getByLabel('Организация отправителя', { exact: true }).locator('option');
   await expect(senderOptions).toHaveCount(1);
   await expect(senderOptions.getByText('Other Sender')).toHaveCount(0);
-  await expect(page.getByRole('alert')).toContainText('Resource not found');
+  await expect(page.getByRole('alert')).toContainText('Запись не найдена или недоступна.');
   await expect(page.getByText('SMP-FOREIGN-001')).toHaveCount(0);
 });
 
@@ -316,11 +316,11 @@ test('Server validation error does not create a local draft Shipment', async ({ 
   await page.goto('/');
   await signInAsSender(page);
   await page.getByRole('button', { name: 'Отправитель' }).click();
-  await page.getByLabel('Sender organization').selectOption(senderOrgId);
-  await page.getByLabel('Destination laboratory').selectOption(destinationOrgId);
-  await page.getByLabel('Expected delivery').fill(new Date(Date.now() + 86_400_000).toISOString().slice(0, 16));
-  await page.getByRole('button', { name: 'Create draft Shipment' }).click();
-  await expect(page.getByRole('alert')).toContainText('configured destination laboratory');
+  await page.getByLabel('Организация отправителя', { exact: true }).selectOption(senderOrgId);
+  await page.getByLabel('Лаборатория-получатель').selectOption(destinationOrgId);
+  await page.getByLabel('Ожидаемая дата доставки').fill(new Date(Date.now() + 86_400_000).toISOString().slice(0, 16));
+  await page.getByRole('button', { name: 'Создать черновик отправки' }).click();
+  await expect(page.getByRole('alert')).toContainText('Организация отправителя и лаборатория-получатель должны находиться в одном регионе.');
   await expect(page.getByText('SHP-LOCAL-001')).toHaveCount(0);
 });
 
@@ -339,22 +339,22 @@ test('aborts an in-flight Sender mutation when another tab switches accounts', a
 
   await firstTab.goto('/');
   await signInAsSender(firstTab);
-  await firstTab.getByLabel('Material type').selectOption('BLOOD');
-  await firstTab.getByRole('button', { name: 'Create sample' }).click();
+  await firstTab.getByLabel('Тип материала').selectOption('BLOOD');
+  await firstTab.getByRole('button', { name: 'Создать образец' }).click();
   await firstApi.sampleRequestStarted;
 
   await secondTab.goto('/');
   await signInAsSender(secondTab);
-  await secondTab.getByRole('button', { name: 'Switch account' }).click();
+  await secondTab.getByRole('button', { name: 'Сменить учётную запись' }).click();
   const switchDialog = secondTab.getByRole('dialog');
-  await switchDialog.getByLabel('New account email').fill(secondUser.email);
-  await switchDialog.getByLabel('New account password').fill('test-password');
-  await switchDialog.getByRole('button', { name: 'Continue to account' }).click();
+  await switchDialog.getByLabel('Электронная почта новой учётной записи').fill(secondUser.email);
+  await switchDialog.getByLabel('Пароль новой учётной записи').fill('test-password');
+  await switchDialog.getByRole('button', { name: 'Продолжить' }).click();
   await secondTab.getByRole('dialog')
-    .getByRole('button', { name: 'Switch account and clear local data' })
+    .getByRole('button', { name: 'Сменить учётную запись и очистить данные' })
     .click();
 
-  await expect(firstTab.getByRole('alert')).toContainText('active account changed');
+  await expect(firstTab.getByRole('alert')).toContainText('Учётная запись изменилась в другой вкладке. Войдите снова.');
   await expect.poll(() => samplePostFailed, { timeout: 2_000 }).toBe(true);
   firstApi.releaseHeldSampleResponse();
   await expect(firstTab.getByText('SMP-LOCAL-001', { exact: true })).toHaveCount(0);

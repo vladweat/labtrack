@@ -57,17 +57,17 @@ function requiredCredential(name: string): string {
 }
 
 async function signIn(page: Page, emailName: string, passwordName: string) {
-  await page.getByLabel('Email').fill(requiredCredential(emailName));
-  await page.getByLabel('Password').fill(requiredCredential(passwordName));
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await page.getByLabel('Электронная почта').fill(requiredCredential(emailName));
+  await page.getByLabel('Пароль').fill(requiredCredential(passwordName));
+  await page.getByRole('button', { name: 'Войти' }).click();
 }
 
 async function signOut(page: Page) {
-  await page.getByRole('button', { name: 'Log out' }).click();
+  await page.getByRole('button', { name: 'Выйти' }).click();
   await page.getByRole('dialog')
-    .getByRole('button', { name: 'Log out and clear local data' })
+    .getByRole('button', { name: 'Выйти и очистить данные устройства' })
     .click();
-  await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Войти' })).toBeVisible();
 }
 
 function redactGeneratedCredentials(message: string): string {
@@ -287,110 +287,110 @@ test('real Sender → Courier → Lab workflow reaches server completion', async
   expect(redirectTargetRequests).toBe(0);
 
   await signIn(page, 'LABTRACK_LOCAL_SENDER_EMAIL', 'LABTRACK_LOCAL_SENDER_PASSWORD');
-  await expect(page.getByRole('heading', { name: 'Sender workspace' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Рабочая область отправителя' })).toBeVisible();
 
-  await page.getByLabel('Material type').selectOption('BLOOD');
-  await page.getByRole('button', { name: 'Create sample' }).click();
-  const sampleRow = page.locator('.sender-resource-list li').filter({ hasText: 'BLOOD' }).first();
+  await page.getByLabel('Тип материала').selectOption('BLOOD');
+  await page.getByRole('button', { name: 'Создать образец' }).click();
+  const sampleRow = page.locator('.sender-resource-list li').filter({ hasText: 'Кровь' }).first();
   await expect(sampleRow).toBeVisible();
   const sampleCode = (await sampleRow.locator('strong').innerText()).trim();
 
   const expectedDelivery = new Date(Date.now() + 24 * 60 * 60 * 1000)
     .toISOString()
     .slice(0, 16);
-  await page.getByLabel('Sender organization').selectOption({ label: 'Local Synthetic Sender' });
-  await page.getByLabel('Destination laboratory').selectOption({ label: 'Центральная лаборатория' });
-  await page.getByLabel('Expected delivery').fill(expectedDelivery);
-  await page.getByRole('button', { name: 'Create draft Shipment' }).click();
-  await expect(page.getByRole('heading', { name: /^Shipment / })).toBeVisible();
+  await page.getByLabel('Организация отправителя', { exact: true }).selectOption({ label: 'Local Synthetic Sender' });
+  await page.getByLabel('Лаборатория-получатель').selectOption({ label: 'Центральная лаборатория' });
+  await page.getByLabel('Ожидаемая дата доставки').fill(expectedDelivery);
+  await page.getByRole('button', { name: 'Создать черновик отправки' }).click();
+  await expect(page.getByRole('heading', { name: /^Отправка / })).toBeVisible();
   const shipmentId = (await page.locator('.sender-shipment-id').innerText()).trim();
-  const shipmentCode = (await page.getByRole('heading', { name: /^Shipment / }).innerText())
-    .replace(/^Shipment\s+/, '')
+  const shipmentCode = (await page.getByRole('heading', { name: /^Отправка / }).innerText())
+    .replace(/^Отправка\s+/, '')
     .trim();
   expect(shipmentId).toMatch(/^[0-9a-f-]{36}$/i);
 
-  await page.getByLabel('Courier').selectOption({ label: 'Stage I Courier' });
-  await page.getByRole('button', { name: 'Assign Courier' }).click();
-  await page.getByRole('button', { name: 'Add container' }).click();
+  await page.getByLabel('Курьер').selectOption({ label: 'Stage I Courier' });
+  await page.getByRole('button', { name: 'Назначить курьера' }).click();
+  await page.getByRole('button', { name: 'Добавить контейнер' }).click();
   const containerRow = page.locator('.sender-container-list li').first();
   await expect(containerRow).toBeVisible();
   const containerCode = (await containerRow.locator('strong').innerText()).trim();
-  await page.getByLabel('Sample to add').selectOption({ label: `${sampleCode} · BLOOD` });
-  await page.getByRole('button', { name: 'Add sample to container' }).click();
-  await page.getByRole('button', { name: 'Seal Shipment' }).click();
+  await page.getByLabel('Образец для добавления').selectOption({ label: `${sampleCode} · Кровь` });
+  await page.getByRole('button', { name: 'Добавить образец в контейнер' }).click();
+  await page.getByRole('button', { name: 'Опечатать отправку' }).click();
   await expect(page.getByText('Готово к забору', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Release Pickup' }).click();
+  await page.getByRole('button', { name: 'Разрешить забор' }).click();
   await expect(page.getByText('Ожидает забора', { exact: true })).toBeVisible();
 
   await signOut(page);
   await signIn(page, 'LABTRACK_LOCAL_COURIER_EMAIL', 'LABTRACK_LOCAL_COURIER_PASSWORD');
-  await expect(page.getByRole('heading', { name: 'Welcome, Stage I Courier' })).toBeVisible();
-  await page.getByLabel('Shipment ID').fill(shipmentId);
-  await page.getByRole('button', { name: 'Load assigned Shipment' }).click();
-  await expect(page.getByRole('list', { name: 'Sealed container codes' }).getByText(containerCode)).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Добро пожаловать, Stage I Courier' })).toBeVisible();
+  await page.getByLabel('Идентификатор отправки').fill(shipmentId);
+  await page.getByRole('button', { name: 'Загрузить назначенную отправку' }).click();
+  await expect(page.getByRole('list', { name: 'Коды опечатанных контейнеров' }).getByText(containerCode)).toBeVisible();
 
-  await page.getByLabel('Confirm all sealed container codes').fill(containerCode);
-  await page.getByRole('button', { name: 'Queue Pickup confirmation' }).click();
-  await page.getByRole('button', { name: 'Sync pending commands' }).click();
-  const pickupCard = page.locator('.command-card').filter({ hasText: 'Pickup confirmation' });
-  await expect(pickupCard).toContainText('SYNCED');
-  await expect(pickupCard).toContainText('Server applied');
+  await page.getByLabel('Введите коды всех опечатанных контейнеров').fill(containerCode);
+  await page.getByRole('button', { name: 'Поставить подтверждение забора в очередь' }).click();
+  await page.getByRole('button', { name: 'Синхронизировать команды' }).click();
+  const pickupCard = page.locator('.command-card').filter({ hasText: 'Подтверждение забора' });
+  await expect(pickupCard).toContainText('Синхронизировано');
+  await expect(pickupCard).toContainText('Применено на сервере');
 
   // Fetch a new authoritative snapshot after the Pickup command is applied.
-  await page.getByRole('button', { name: 'Load assigned Shipment' }).click();
-  await expect(page.locator('.snapshot-panel .status-badge')).toHaveText('IN TRANSIT');
-  await page.getByLabel('Container to deliver').selectOption({ label: containerCode });
-  await page.getByRole('button', { name: 'Queue one-container Delivery' }).click();
-  await page.getByRole('button', { name: 'Sync pending commands' }).click();
+  await page.getByRole('button', { name: 'Загрузить назначенную отправку' }).click();
+  await expect(page.locator('.snapshot-panel .status-badge')).toHaveText('В пути');
+  await page.getByLabel('Контейнер для доставки').selectOption({ label: containerCode });
+  await page.getByRole('button', { name: 'Поставить доставку одного контейнера в очередь' }).click();
+  await page.getByRole('button', { name: 'Синхронизировать команды' }).click();
   const deliveryCard = page.locator('.command-card').filter({
-    hasText: `Delivery initiation for ${containerCode}`,
+    hasText: `Доставка контейнера ${containerCode}`,
   });
-  await expect(deliveryCard).toContainText('SYNCED');
-  await expect(deliveryCard).toContainText('Server applied');
-  await page.getByRole('button', { name: 'Load assigned Shipment' }).click();
+  await expect(deliveryCard).toContainText('Синхронизировано');
+  await expect(deliveryCard).toContainText('Применено на сервере');
+  await page.getByRole('button', { name: 'Загрузить назначенную отправку' }).click();
   await expect(
-    page.getByRole('list', { name: 'Sealed container codes' }).getByText('DELIVERY PENDING', { exact: true }),
+    page.getByRole('list', { name: 'Коды опечатанных контейнеров' }).getByText('Ожидает доставки', { exact: true }),
   ).toBeVisible();
 
   await signOut(page);
   await signIn(page, 'LABTRACK_LOCAL_LAB_OPERATOR_EMAIL', 'LABTRACK_LOCAL_LAB_OPERATOR_PASSWORD');
-  await expect(page.getByRole('heading', { name: 'Lab workspace' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Рабочая область лаборатории' })).toBeVisible();
   const labShipmentButton = page.getByRole('button', { name: new RegExp(shipmentCode) });
   await firstManifestResponseReady;
   try {
     await expect(labShipmentButton).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.getByText('Loading Shipment manifest and receiving history…')).toBeVisible();
+    await expect(page.getByText('Загружаем манифест отправки и историю приёмки…')).toBeVisible();
     await labShipmentButton.click();
   } finally {
     releaseFirstManifestResponse();
   }
-  await expect(page.getByLabel('Receipt container code')).toBeVisible();
-  await page.getByLabel('Receipt container code').fill(containerCode);
-  await page.getByRole('button', { name: 'Confirm receipt' }).click();
+  await expect(page.getByLabel('Код контейнера при приёмке')).toBeVisible();
+  await page.getByLabel('Код контейнера при приёмке').fill(containerCode);
+  await page.getByRole('button', { name: 'Подтвердить приёмку' }).click();
 
-  await page.getByRole('button', { name: `Record result for ${sampleCode}` }).click();
-  await expect(page.getByText(`Result saved for ${sampleCode}.`)).toBeVisible();
-  await page.getByRole('button', { name: 'Complete receiving' }).click();
-  await expect(page.getByTestId('lab-shipment-status')).toHaveText('COMPLETED');
+  await page.getByRole('button', { name: `Сохранить результат для ${sampleCode}` }).click();
+  await expect(page.getByText(`Результат для образца ${sampleCode} сохранён.`)).toBeVisible();
+  await page.getByRole('button', { name: 'Завершить приёмку' }).click();
+  await expect(page.getByTestId('lab-shipment-status')).toHaveText('Завершено');
 
   await signOut(page);
   await signIn(page, 'LABTRACK_LOCAL_LAB_MANAGER_EMAIL', 'LABTRACK_LOCAL_LAB_MANAGER_PASSWORD');
-  await expect(page.getByRole('heading', { name: 'Lab workspace' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Рабочая область лаборатории' })).toBeVisible();
   const managerShipmentButton = page.getByRole('button', { name: new RegExp(shipmentCode) });
   await expect(managerShipmentButton).toBeVisible();
   await managerShipmentButton.click();
-  await expect(page.getByRole('heading', { name: 'Receiving history' })).toBeVisible();
-  await expect(page.getByText('Session 1 · CLOSED')).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Reopen receiving' })).toBeVisible();
-  await page.getByLabel('Reopen reason').fill('Synthetic manager review');
-  await page.getByRole('button', { name: 'Reopen receiving' }).click();
-  await expect(page.getByTestId('lab-shipment-status')).toHaveText('RECEIVING');
-  await expect(page.getByText('Session 2 · OPEN')).toBeVisible();
-  await expect(page.getByText('Reopen reason: Synthetic manager review')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'История приёмки' })).toBeVisible();
+  await expect(page.getByText('Сеанс 1 · Закрыта')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Открыть повторно' })).toBeVisible();
+  await page.getByLabel('Причина повторного открытия').fill('Synthetic manager review');
+  await page.getByRole('button', { name: 'Открыть повторно' }).click();
+  await expect(page.getByTestId('lab-shipment-status')).toHaveText('Приёмка');
+  await expect(page.getByText('Сеанс 2 · Открыта')).toBeVisible();
+  await expect(page.getByText('Причина повторного открытия: Synthetic manager review')).toBeVisible();
 
   await signOut(page);
-  const sharedDemoNotice = page.getByRole('note', { name: 'Shared demo notice' });
-  await expect(sharedDemoNotice).toContainText('Demo accounts and data are shared and synthetic.');
+  const sharedDemoNotice = page.getByRole('note', { name: 'Общее уведомление о демо' });
+  await expect(sharedDemoNotice).toContainText('Учётные записи и данные демо общие и синтетические.');
   const configuredPasswords = Object.entries(process.env)
     .filter(([name, value]) => name.endsWith('_PASSWORD') && value)
     .map(([, value]) => value as string);
