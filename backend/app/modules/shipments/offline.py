@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import API_ERROR_RESPONSES
+from app.core.logging import emit_telemetry_event
 from app.db.session import get_db_session
 from app.modules.idempotency.models import IdempotencyRecord, OfflineCommandTombstone
 from app.modules.idempotency.service import (
@@ -133,6 +134,53 @@ class CommandNotApplied(Exception):
         self.code = code
         self.message = message
         self.outcome = outcome
+
+
+def _record_offline_sync_result(
+    command: CourierOfflinePickupCommand | CourierOfflineContainerDeliveryCommand,
+    result: dict,
+) -> None:
+    """Emit one bounded counter event after the command's transaction decision."""
+
+    command_type = {
+        "COURIER_CONFIRM_PICKUP": "pickup",
+        "COURIER_INITIATE_CONTAINER_DELIVERY": "delivery",
+    }.get(command.action)
+    outcome = {
+        "APPLIED": "applied",
+        "ALREADY_APPLIED": "replayed",
+        "REJECTED": "rejected",
+        "RETRYABLE": "retryable",
+        "REVIEW_REQUIRED": "review_required",
+    }.get(result.get("outcome"))
+    if command_type is None or outcome is None:
+        return
+
+    error = result.get("error")
+    code = error.get("code") if isinstance(error, dict) else None
+    reason_category = {
+        "RESOURCE_NOT_FOUND": "authorization",
+        "IDEMPOTENCY_KEY_REUSED": "idempotency",
+        "OFFLINE_COMMAND_STALE": "stale_state",
+        "OFFLINE_SNAPSHOT_EXPIRED": "expired_snapshot",
+        "INVALID_SNAPSHOT": "invalid_snapshot",
+        "INVALID_DEPENDENCY": "dependency",
+        "DEPENDENCY_NOT_AVAILABLE": "dependency",
+        "COMMAND_REJECTED": "invalid_command",
+        "SYNC_TEMPORARILY_UNAVAILABLE": "temporary_failure",
+        None: "none",
+    }.get(code, "unknown")
+    try:
+        emit_telemetry_event(
+            "offline_sync_command",
+            command_type=command_type,
+            outcome=outcome,
+            reason_category=reason_category,
+            count=1,
+        )
+    except Exception:
+        # Instrumentation must not turn a committed/rejected command into a failure.
+        return
 
 
 def command_result(
@@ -351,9 +399,11 @@ async def sync_offline_command(
         if shipment is None:
             # Do not expose stored outcomes or consume a key when current scope is absent.
             await session.rollback()
-            return command_result(
+            result = command_result(
                 command, "REJECTED", code="RESOURCE_NOT_FOUND", message="Resource not found"
             )
+            _record_offline_sync_result(command, result)
+            return result
         command_data = command.model_dump(mode="json")
         request_hash = canonical_request_hash(command_data)
         tombstone = await lock_offline_command(
@@ -387,6 +437,7 @@ async def sync_offline_command(
                     "recorded_at": tombstone.recorded_at.isoformat(),
                 }
             await session.commit()
+            _record_offline_sync_result(command, result)
             return result
         try:
             # Definite rejections may follow partially executed shared commands.
@@ -404,7 +455,9 @@ async def sync_offline_command(
                 outcome, code, message = error.outcome, error.code, error.message
             if outcome == "RETRYABLE":
                 await session.rollback()
-                return command_result(command, outcome, code=code, message=message)
+                result = command_result(command, outcome, code=code, message=message)
+                _record_offline_sync_result(command, result)
+                return result
             causal_metadata = None
             result = command_result(
                 command, outcome, server_status=shipment.status, code=code, message=message
@@ -418,18 +471,21 @@ async def sync_offline_command(
             causal_metadata=causal_metadata,
         )
         await session.commit()
+        _record_offline_sync_result(command, result)
         return result
     except Exception as error:
         await session.rollback()
         logger.error(
             "Offline command %s rolled back (%s)", command.client_command_id, type(error).__name__
         )
-        return command_result(
+        result = command_result(
             command,
             "RETRYABLE",
             code="SYNC_TEMPORARILY_UNAVAILABLE",
             message="Command was not recorded; retry the exact command",
         )
+        _record_offline_sync_result(command, result)
+        return result
 
 
 @router.post(

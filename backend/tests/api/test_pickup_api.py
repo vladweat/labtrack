@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from importlib import import_module, util
 from pathlib import Path
@@ -12,6 +13,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.core.config import get_settings
+from app.core.logging import JsonFormatter
 from app.core.security import hash_password
 from app.db.session import get_session_factory
 from app.main import app
@@ -260,6 +262,71 @@ async def test_database_rejects_unconfirmed_direct_pickup_state_changes() -> Non
         with pytest.raises(DBAPIError, match="Active Pickup handoff must match shipment state"):
             await session.commit()
         await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_pickup_conflict_logs_bounded_failure_without_changing_response_or_state(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context = await create_pickup_fixture(client)
+        release = await client.post(
+            f"/api/v1/shipments/{context['shipment_id']}/handoffs/pickup/confirm-release",
+            headers={
+                **context["sender_auth"],
+                "Idempotency-Key": f"pickup-release-failure-{context['suffix']}",
+            },
+            json={"container_codes": [item["code"] for item in context["containers"]]},
+        )
+        assert release.status_code == 200
+
+        with caplog.at_level(logging.INFO, logger="app.telemetry"):
+            response = await client.post(
+                f"/api/v1/shipments/{context['shipment_id']}/handoffs/pickup/confirm-pickup",
+                headers={
+                    **context["courier_auth"],
+                    "Idempotency-Key": f"pickup-confirm-failure-{context['suffix']}",
+                },
+                json={"container_codes": ["UNEXPECTED-CODE"]},
+            )
+
+        assert response.status_code == 409
+        assert response.json()["error"] == {
+            "code": "MANIFEST_MISMATCH",
+            "message": "Container codes must match the complete sealed manifest",
+            "details": {},
+            "request_id": response.headers["X-Request-ID"],
+        }
+
+    events = [record for record in caplog.records if record.msg == "custody_command_failure"]
+    assert len(events) == 1
+    event_payload = json.loads(JsonFormatter().format(events[0]))
+    assert event_payload["command_type"] == "pickup"
+    assert event_payload["reason_category"] == "conflict"
+    assert event_payload["count"] == 1
+    serialized = json.dumps(event_payload)
+    for private_value in (
+        context["shipment_id"],
+        context["sender_id"],
+        context["container_id"],
+    ):
+        assert str(private_value) not in serialized
+
+    async with get_session_factory()() as session:
+        assert (
+            await session.scalar(
+                select(Shipment.status).where(Shipment.id == context["shipment_id"])
+            )
+            == "PICKUP_PENDING"
+        )
+        assert (
+            await session.scalar(
+                select(Handoff.status).where(
+                    Handoff.shipment_id == context["shipment_id"], Handoff.kind == "PICKUP"
+                )
+            )
+            == "PENDING"
+        )
 
 
 @pytest.mark.asyncio

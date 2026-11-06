@@ -222,6 +222,21 @@ def _stalled_case_cte(
     return union_all(pickup, delivery, proposal, overdue).cte("stalled_cases")
 
 
+async def count_stalled_pickup_delivery(
+    session: AsyncSession, settings: Settings
+) -> tuple[int, int]:
+    """Count threshold-qualified Pickup and Delivery work without loading case identifiers."""
+
+    cases = _stalled_case_cte(settings)
+    rows = await session.execute(
+        select(cases.c.case_type, func.count())
+        .where(cases.c.case_type.in_(("PICKUP_PENDING", "DELIVERY_PENDING")))
+        .group_by(cases.c.case_type)
+    )
+    counts = {case_type: int(count) for case_type, count in rows.all()}
+    return counts.get("PICKUP_PENDING", 0), counts.get("DELIVERY_PENDING", 0)
+
+
 async def list_stalled_cases(
     session: AsyncSession,
     principal: Principal,

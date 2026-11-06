@@ -1,19 +1,21 @@
 """PostgreSQL-backed checks for the registered Stage H notification scan task."""
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.config import get_settings
+from app.core.logging import JsonFormatter
 from app.modules.identity.models import Membership, Organization, Region, User
 from app.modules.notifications.models import NotificationRecord
-from app.modules.shipments.models import Handoff, Shipment
+from app.modules.shipments.models import Handoff, Shipment, TransportContainer
 from app.workers import notifications as notification_worker
 from app.workers.notifications import scan_stalled_notifications
 
@@ -145,7 +147,9 @@ async def _custody_snapshot(
 
 @pytest.mark.asyncio
 async def test_registered_scan_persists_safe_row_deduplicates_without_custody_changes(
-    owner_sessions: async_sessionmaker[AsyncSession], monkeypatch: pytest.MonkeyPatch
+    owner_sessions: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     (
         shipment_id,
@@ -155,12 +159,45 @@ async def test_registered_scan_persists_safe_row_deduplicates_without_custody_ch
         region_id,
         initiated_at,
     ) = await _create_stalled_pickup(owner_sessions)
-    scan_settings = get_settings().model_copy(update={"stalled_pickup_seconds": 300})
+    scan_settings = get_settings().model_copy(
+        update={"stalled_pickup_seconds": 300, "stalled_delivery_seconds": 300}
+    )
     monkeypatch.setattr(notification_worker, "get_settings", lambda: scan_settings)
     custody_before = await _custody_snapshot(owner_sessions, shipment_id, event_id)
 
-    first_insert_count = await asyncio.to_thread(scan_stalled_notifications.run)
-    second_insert_count = await asyncio.to_thread(scan_stalled_notifications.run)
+    with caplog.at_level("INFO", logger="app.workers.notifications"):
+        first_insert_count = await asyncio.to_thread(scan_stalled_notifications.run)
+        second_insert_count = await asyncio.to_thread(scan_stalled_notifications.run)
+        custody_after_initial_scans = await _custody_snapshot(owner_sessions, shipment_id, event_id)
+
+        async with owner_sessions() as owner, owner.begin():
+            await owner.execute(text("SET LOCAL session_replication_role = 'replica'"))
+            shipment = await owner.get(Shipment, shipment_id)
+            assert shipment is not None
+            shipment.status = "DELIVERY_PENDING"
+            container = TransportContainer(
+                shipment_id=shipment_id,
+                code=f"SCAN-DELIVERY-{uuid4().hex[:12]}",
+                delivery_status="DELIVERY_PENDING",
+            )
+            owner.add(container)
+            await owner.flush()
+            owner.add(
+                Handoff(
+                    shipment_id=shipment_id,
+                    kind="DELIVERY",
+                    container_id=container.id,
+                    attempt_no=1,
+                    status="PENDING",
+                    initiated_by=recipient_id,
+                    initiated_at=initiated_at,
+                )
+            )
+
+        custody_before_delivery_scan = await _custody_snapshot(
+            owner_sessions, shipment_id, event_id
+        )
+        third_insert_count = await asyncio.to_thread(scan_stalled_notifications.run)
 
     async with owner_sessions() as owner:
         records = list(
@@ -171,9 +208,14 @@ async def test_registered_scan_persists_safe_row_deduplicates_without_custody_ch
             ).all()
         )
     custody_after = await _custody_snapshot(owner_sessions, shipment_id, event_id)
+    completed_events = [
+        record for record in caplog.records if record.msg == "stalled_notification_scan_completed"
+    ]
+    completed_payloads = [json.loads(JsonFormatter().format(record)) for record in completed_events]
 
     assert first_insert_count == 1
     assert second_insert_count == 0
+    assert third_insert_count == 0
     assert len(records) == 1
     record = records[0]
     assert record.recipient_user_id == recipient_id
@@ -194,7 +236,46 @@ async def test_registered_scan_persists_safe_row_deduplicates_without_custody_ch
         "status",
         "last_event_at",
     }
-    assert custody_after == custody_before
+    assert custody_after_initial_scans == custody_before
+    assert custody_after == custody_before_delivery_scan
+    assert [
+        (item["stalled_pickup_count"], item["stalled_delivery_count"])
+        for item in completed_payloads
+    ] == [(1, 0), (1, 0), (0, 1)]
+
+
+@pytest.mark.asyncio
+async def test_stalled_work_count_failure_does_not_block_notification_persistence(
+    owner_sessions: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _, event_id, _, _, _, _ = await _create_stalled_pickup(owner_sessions)
+    scan_settings = get_settings().model_copy(update={"stalled_pickup_seconds": 300})
+    monkeypatch.setattr(notification_worker, "get_settings", lambda: scan_settings)
+
+    async def fail_work_count(*_args: object, **_kwargs: object) -> tuple[int, int]:
+        raise RuntimeError("synthetic aggregate query failure")
+
+    monkeypatch.setattr(
+        notification_worker, "count_stalled_pickup_delivery", fail_work_count, raising=False
+    )
+    with caplog.at_level("INFO", logger="app.workers.notifications"):
+        inserted = await asyncio.to_thread(scan_stalled_notifications.run)
+
+    async with owner_sessions() as owner:
+        persisted_count = await owner.scalar(
+            select(func.count())
+            .select_from(NotificationRecord)
+            .where(NotificationRecord.event_id == event_id)
+        )
+    assert inserted == 1
+    assert persisted_count == 1
+    failures = [record for record in caplog.records if record.msg == "stalled_work_count_failed"]
+    assert len(failures) == 1
+    payload = json.loads(JsonFormatter().format(failures[0]))
+    assert payload["error_type"] == "RuntimeError"
+    assert "synthetic aggregate query failure" not in json.dumps(payload)
 
 
 @pytest.mark.asyncio

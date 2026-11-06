@@ -15,6 +15,7 @@
 | Установка для разработки | [Локальная разработка](development.md) |
 | Synthetic demo и безопасный сброс | [Demo deployment](deploy.md) |
 | Backup/restore drill изолированной synthetic БД | [Backup/restore](backup-restore.md) |
+| Низкокардинальная workflow observability и runbook | [Observability](workflow-observability.md) |
 
 ## Утвержденные требования и проектные материалы
 
