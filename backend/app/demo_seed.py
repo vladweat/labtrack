@@ -245,16 +245,18 @@ def create_demo_shipment(sender_org_id: UUID, courier_id: UUID, lab_id: UUID) ->
         },
     )
     shipment_id = shipment["id"]
-    expected_delivery_at = (datetime.now(UTC) + timedelta(days=1)).replace(
-        hour=12, minute=0, second=0, microsecond=0
-    )
-    api_request(
-        "PATCH",
-        f"/api/v1/shipments/{shipment_id}",
-        token=sender_token,
-        idempotency_key="labtrack-public-demo-v1-delivery-date",
-        body={"expected_delivery_at": expected_delivery_at.isoformat()},
-    )
+    current_shipment = api_request("GET", f"/api/v1/shipments/{shipment_id}", token=sender_token)
+    if current_shipment["expected_delivery_at"] is None:
+        expected_delivery_at = (datetime.now(UTC) + timedelta(days=1)).replace(
+            hour=12, minute=0, second=0, microsecond=0
+        )
+        api_request(
+            "PATCH",
+            f"/api/v1/shipments/{shipment_id}",
+            token=sender_token,
+            idempotency_key="labtrack-public-demo-v1-delivery-date",
+            body={"expected_delivery_at": expected_delivery_at.isoformat()},
+        )
     api_request(
         "PATCH",
         f"/api/v1/shipments/{shipment_id}/courier",
