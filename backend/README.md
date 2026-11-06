@@ -118,7 +118,9 @@ The separate `seed-demo` command creates only synthetic Sender, Courier, Lab,
 and Shipment data. It requires `APP_ENV=demo`, `DEMO_SEED_ENABLED=true`, and a
 database name containing `demo` or `test`; see the
 [demo deployment guide](../docs/deploy.md) for the isolated local setup and
-reset procedure.
+reset procedure. The separate local-only PostgreSQL backup/restore drill and
+its recovery limits are documented in the
+[backup/restore guide](../docs/backup-restore.md).
 
 JWT roles are not embedded in tokens. Protected use cases must use `Principal`/`require_roles` and verify the active organization or region scope against the target resource. A role match by itself is not an ownership check. Redis is not required for readiness or authentication.
 

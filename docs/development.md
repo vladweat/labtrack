@@ -81,3 +81,7 @@ npm run test:acceptance:local
 они могут содержать синтетические идентификаторы или тела ответов.
 
 Дополнительные команды и поведение PWA описаны в [web README](../web/README.md). Перед использованием новых локальных данных проверьте синтетическую границу в [данных и целостности](data-and-integrity.md).
+
+Локальный synthetic PostgreSQL backup/restore drill, его ограничения и точные
+команды описаны в [руководстве backup/restore](backup-restore.md). Он требует
+отдельный demo sandbox и не касается public demo.

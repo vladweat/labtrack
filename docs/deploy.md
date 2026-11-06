@@ -123,6 +123,10 @@ This removes the sandbox volume named
 volumes. Recreate the environment file and repeat the setup to start over. Do
 not use this reset command with the public deployment project.
 
+Для проверки backup/restore только этой локальной synthetic БД см.
+[воспроизводимый drill](backup-restore.md). Он не является инструкцией
+восстановления public demo.
+
 ## Public synthetic demo
 
 The base `deploy/demo/compose.yaml` and its `.env` are environment-private

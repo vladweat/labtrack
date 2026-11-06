@@ -14,6 +14,7 @@
 | Runtime endpoints и OpenAPI caveat | [API](api.md) |
 | Установка для разработки | [Локальная разработка](development.md) |
 | Synthetic demo и безопасный сброс | [Demo deployment](deploy.md) |
+| Backup/restore drill изолированной synthetic БД | [Backup/restore](backup-restore.md) |
 
 ## Утвержденные требования и проектные материалы
 
