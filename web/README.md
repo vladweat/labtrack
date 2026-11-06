@@ -35,7 +35,7 @@ The local Sender→Courier→Lab browser/API acceptance is separate from the
 default mocked suite. From `web/`, run `npm run test:acceptance:local` after
 starting the disposable local setup described in the [development guide](../docs/development.md).
 
-## Local data and demo environment
+## Local data and synthetic-data boundary
 
 The access token stays in memory and is not restored after a reload. Sign in
 again to access the same account's IndexedDB queue. Snapshots, immutable
@@ -50,6 +50,8 @@ stores Sample records with material type, collection time, and opaque external
 references, but no patient identity fields. External references may still
 identify people, so use synthetic data only. The build in `dist/` is static
 output.
-The [demo environment](https://labtrack.wvzl.site) uses shared synthetic
-accounts and mutable synthetic data. The link identifies an environment; it
-does not promise availability or that the environment matches this revision.
+
+For a reproducible walkthrough, use the isolated local synthetic sandbox in the
+[demo guide](../docs/deploy.md). Its seed command targets only an explicitly
+enabled demo database and local LabTrack API. Do not assume a shared public demo
+URL or use shared demo data for a walkthrough.

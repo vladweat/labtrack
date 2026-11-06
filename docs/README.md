@@ -10,6 +10,7 @@
 | Сервисы и границы модулей | [Архитектура](architecture.md) |
 | Модель данных и инварианты | [Данные и целостность](data-and-integrity.md) |
 | Courier PWA без сети | [Offline-синхронизация](offline-sync.md) |
+| Кадры локального synthetic walkthrough | [Галерея скриншотов](screenshots.md) |
 | Runtime endpoints и OpenAPI caveat | [API](api.md) |
 | Установка для разработки | [Локальная разработка](development.md) |
 | Synthetic demo и безопасный сброс | [Demo deployment](deploy.md) |
