@@ -79,7 +79,7 @@ def _schemas_match(expected: dict, actual: dict) -> bool:
     return expected == actual
 
 
-def test_stage_h_runtime_openapi_matches_static_route_and_schema_contracts() -> None:
+def test_stage_h_runtime_openapi_conforms_to_historical_design_excerpt() -> None:
     contract_path = Path(__file__).resolve().parents[3] / "openapi" / "labtrack-v1.json"
     contract = json.loads(contract_path.read_text())
     runtime = app.openapi()

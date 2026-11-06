@@ -50,7 +50,7 @@ async def authorize_unassigned_courier(
     return courier_id, {"Authorization": f"Bearer {login.json()['access_token']}"}
 
 
-def test_offline_manifest_runtime_openapi_matches_static_contract() -> None:
+def test_offline_manifest_runtime_openapi_conforms_to_historical_design_excerpt() -> None:
     contract_path = Path(__file__).resolve().parents[3] / "openapi" / "labtrack-v1.json"
     contract = json.loads(contract_path.read_text(encoding="utf-8"))
     generated = app.openapi()
@@ -1177,7 +1177,7 @@ async def test_sync_compaction_preserves_tombstone_identity_replay_and_minimum_r
         )
 
 
-def test_sync_runtime_openapi_matches_static_contract():
+def test_sync_runtime_openapi_conforms_to_historical_design_excerpt():
     contract = json.loads(
         (Path(__file__).resolve().parents[3] / "openapi/labtrack-v1.json").read_text()
     )

@@ -53,7 +53,7 @@ npm ci
 npm run dev
 ```
 
-После запуска API интерактивная схема находится на [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs). Статический [OpenAPI JSON](openapi/labtrack-v1.json) — черновик, а не полный runtime-контракт; подробности в [docs/api.md](docs/api.md).
+После запуска API интерактивная схема находится на [http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs), runtime JSON — на [http://127.0.0.1:8000/openapi.json](http://127.0.0.1:8000/openapi.json). [Исторический OpenAPI v0.6.1](openapi/labtrack-v1.json) остаётся design-файлом; детальное различие и команда экспорта из `app.openapi()` описаны в [docs/api.md](docs/api.md).
 
 Для входа создайте пользователя и scoped membership операторской CLI-командой; примеры есть в [backend/README.md](backend/README.md).
 
