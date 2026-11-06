@@ -29,7 +29,7 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[dev]'
 alembic upgrade head
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --no-proxy-headers
 ```
 
 API доступен на `http://127.0.0.1:8000`; интерактивная схема — `/docs`. Аккаунты и scoped membership настраиваются оператором через CLI из `backend/`, публичного API администрирования нет. Примеры CLI и настройки ролей: [backend README](../backend/README.md).

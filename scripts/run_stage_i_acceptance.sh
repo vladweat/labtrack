@@ -395,7 +395,7 @@ if any(value and value in "\n".join(logs) for value in credentials):
 PY
 printf 'Local role CLI: created five fixtures, then reported five unchanged; output contains no credentials.\n'
 
-run_backend "$common_env_file" -m uvicorn app.main:app --host 127.0.0.1 --port "$api_port" --no-access-log > "$api_log" 2>&1 &
+run_backend "$common_env_file" -m uvicorn app.main:app --host 127.0.0.1 --port "$api_port" --no-access-log --no-proxy-headers > "$api_log" 2>&1 &
 api_pid=$!
 if ! python3 - "$api_port" <<'PY'
 import socket
