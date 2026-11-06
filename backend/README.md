@@ -114,6 +114,12 @@ python -m app.cli grant-membership \
 
 Each command validates that the selected scope exists and is active, checks that the role matches the scope type and organization kind, and commits the account/membership change as one transaction. `SENDER_OPERATOR` requires a `HEALTHCARE_FACILITY`; `LAB_OPERATOR` and `LAB_MANAGER` require a `LABORATORY`. Existing email and duplicate membership grants are rejected. Provisioning does not create organizations or regions; those records must already exist.
 
+The separate `seed-demo` command creates only synthetic Sender, Courier, Lab,
+and Shipment data. It requires `APP_ENV=demo`, `DEMO_SEED_ENABLED=true`, and a
+database name containing `demo` or `test`; see the
+[demo deployment guide](../docs/deploy.md) for the isolated local setup and
+reset procedure.
+
 JWT roles are not embedded in tokens. Protected use cases must use `Principal`/`require_roles` and verify the active organization or region scope against the target resource. A role match by itself is not an ownership check. Redis is not required for readiness or authentication.
 
 Useful static checks are `ruff check .`, `ruff format --check .`, and `python -m compileall -q app alembic tests`.

@@ -24,6 +24,7 @@ class Settings(BaseSettings):
 
     app_name: str = "LabTrack API"
     app_env: str = "development"
+    demo_seed_enabled: bool = False
     postgres_db: str = "labtrack"
     postgres_user: str = "labtrack"
     postgres_password: SecretStr = SecretStr("labtrack-local-only-change-me")

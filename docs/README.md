@@ -12,6 +12,7 @@
 | Courier PWA без сети | [Offline-синхронизация](offline-sync.md) |
 | Runtime endpoints и OpenAPI caveat | [API](api.md) |
 | Установка для разработки | [Локальная разработка](development.md) |
+| Synthetic demo и безопасный сброс | [Demo deployment](deploy.md) |
 
 ## Утвержденные требования и проектные материалы
 

@@ -48,6 +48,30 @@ def test_local_role_fixture_command_has_no_credential_arguments() -> None:
         )
 
 
+def test_seed_demo_command_has_no_credential_arguments() -> None:
+    args = cli.build_parser().parse_args(["seed-demo"])
+    assert args.command == "seed-demo"
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["seed-demo", "--password", "not-an-argument"])
+
+
+def test_seed_demo_command_fails_closed_without_demo_opt_in(monkeypatch, capsys) -> None:
+    from app import demo_seed
+    from app.core.config import Settings
+
+    monkeypatch.setattr(demo_seed, "get_settings", lambda: Settings(_env_file=None))
+    monkeypatch.setattr(
+        demo_seed,
+        "get_session_factory",
+        lambda: pytest.fail("database access must not happen when demo mode is disabled"),
+    )
+
+    result = cli.main(["seed-demo"])
+
+    assert result == 2
+    assert "APP_ENV=demo" in capsys.readouterr().err
+
+
 def test_password_prompt_confirms_password_without_echoing(monkeypatch) -> None:
     prompts: list[str] = []
     passwords = iter(["a sufficiently long password", "a sufficiently long password"])
