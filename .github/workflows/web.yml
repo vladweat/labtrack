@@ -2,6 +2,8 @@ name: Web checks
 
 on:
   push:
+    branches:
+      - main
     paths:
       - "web/**"
       - "openapi/labtrack-v1.json"
