@@ -89,7 +89,13 @@ jobs:
           import sys
 
           allowed = {
-              "preflight",
+              "preflight_commands",
+              "preflight_playwright",
+              "preflight_python",
+              "preflight_postgres_image",
+              "preflight_database_name",
+              "preflight_loopback_ports",
+              "workspace_setup",
               "postgres_startup",
               "migrations",
               "runtime_role_check",
