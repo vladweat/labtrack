@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
-from app.core.errors import API_ERROR_RESPONSES
+from app.core.errors import API_ERROR_RESPONSES, APIErrorResponse
 from app.core.login_rate_limit import LoginAttemptLimiter, get_client_source_ip
 from app.core.security import create_access_token, verify_password
 from app.db.session import get_db_session
@@ -34,7 +34,8 @@ LOGIN_ERROR_RESPONSES = {
         },
     },
     429: {
-        **API_ERROR_RESPONSES[429],
+        "model": APIErrorResponse,
+        "description": "Login rate limit exceeded",
         "headers": {
             "Retry-After": {
                 "description": "Seconds until another login attempt is allowed",

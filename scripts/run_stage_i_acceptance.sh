@@ -87,10 +87,21 @@ provision_first_log="$work_dir/provision-first.log"
 provision_second_log="$work_dir/provision-second.log"
 api_pid=""
 playwright_pid=""
+current_stage="preflight"
 
 cleanup() {
   local status=$?
   trap - EXIT INT TERM
+  if [[ "$status" -ne 0 ]]; then
+    case "$current_stage" in
+      preflight|postgres_startup|migrations|runtime_role_check|fixture_setup|provisioning|api_startup|browser_api)
+        printf 'Local acceptance failure stage: %s (exit %s).\n' "$current_stage" "$status" >&2
+        ;;
+      *)
+        printf 'Local acceptance failure stage: unknown (exit %s).\n' "$status" >&2
+        ;;
+    esac
+  fi
   if [[ -n "$playwright_pid" ]]; then
     kill -TERM -- "-$playwright_pid" >/dev/null 2>&1 || true
     kill -TERM "$playwright_pid" >/dev/null 2>&1 || true
@@ -229,6 +240,7 @@ EOF
 chmod 600 "$playwright_env_file"
 
 printf 'Stage I acceptance: fresh PostgreSQL, network none, no published container ports.\n'
+current_stage="postgres_startup"
 docker run --detach --pull=never --network none \
   --name "$container_name" \
   --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid,size=512m \
@@ -267,6 +279,7 @@ if [[ "$ready" != ready ]]; then
   exit 1
 fi
 
+current_stage="migrations"
 if ! run_backend "$common_env_file" -m alembic upgrade head > "$alembic_log" 2>&1; then
   printf 'Alembic upgrade head failed on the fresh Unix-socket database.\n' >&2
   print_sanitized_log "$alembic_log" "$common_env_file" "$role_env_file"
@@ -289,11 +302,13 @@ if ! run_backend "$common_env_file" -m alembic check >> "$alembic_log" 2>&1; the
 fi
 printf 'Migrations: head applied; current/head/schema check passed.\n'
 
+current_stage="runtime_role_check"
 privileges="$(docker exec "$container_name" psql -X --username postgres --dbname "$database_name" --tuples-only --no-align --set=ON_ERROR_STOP=1 --command="SELECT has_table_privilege('labtrack_app', 'public.users', 'SELECT,INSERT,UPDATE,DELETE') AND has_table_privilege('labtrack_app', 'public.shipments', 'SELECT,INSERT,UPDATE,DELETE') AND COALESCE((SELECT bool_and(has_sequence_privilege('labtrack_app', format('%I.%I', schemaname, sequencename), 'USAGE,SELECT')) FROM pg_sequences WHERE schemaname='public'), true);")"
 if [[ "$privileges" != t ]]; then
   printf 'Runtime-role table or sequence privilege check failed.\n' >&2
   exit 1
 fi
+current_stage="fixture_setup"
 docker exec -i "$container_name" psql -X --quiet --username postgres --dbname "$database_name" --set=ON_ERROR_STOP=1 <<'SQL'
 INSERT INTO organizations (id, region_id, code, name, kind, is_active)
 SELECT gen_random_uuid(), region.id, 'LOCAL_SENDER', 'Local Synthetic Sender', 'HEALTHCARE_FACILITY', true
@@ -369,6 +384,7 @@ then
   exit 1
 fi
 
+current_stage="provisioning"
 if ! run_backend "$provision_env_file" -m app.cli provision-local-roles > "$provision_first_log" 2>&1; then
   printf 'First guarded local-role provisioning run failed.\n' >&2
   print_sanitized_log "$provision_first_log" "$common_env_file" "$role_env_file"
@@ -397,6 +413,7 @@ printf 'Local role CLI: created five fixtures, then reported five unchanged; out
 
 run_backend "$common_env_file" -m uvicorn app.main:app --host 127.0.0.1 --port "$api_port" --no-access-log --no-proxy-headers > "$api_log" 2>&1 &
 api_pid=$!
+current_stage="api_startup"
 if ! python3 - "$api_port" <<'PY'
 import socket
 import sys
@@ -453,5 +470,6 @@ run_playwright() {
   return "$status"
 }
 
+current_stage="browser_api"
 run_playwright
 printf 'Real browser acceptance passed. Cleanup will remove the API, disposable database, socket, and temp files.\n'

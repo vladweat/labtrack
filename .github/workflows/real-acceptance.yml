@@ -83,10 +83,31 @@ jobs:
             printf 'Real Sender → Courier → Lab browser/API acceptance passed.\n'
           else
             status=$?
-            printf '::error title=Real acceptance failed::The real acceptance scenario exited with status %s. Raw diagnostics were withheld and not uploaded; rerun locally to inspect the runner diagnostics.\n' "$status"
+            stage="$(python3 - "$test_log" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          allowed = {
+              "preflight",
+              "postgres_startup",
+              "migrations",
+              "runtime_role_check",
+              "fixture_setup",
+              "provisioning",
+              "api_startup",
+              "browser_api",
+              "unknown",
+          }
+          text = Path(sys.argv[1]).read_text(errors="replace")
+          stages = re.findall(r"Local acceptance failure stage: ([a-z_]+) \(exit [0-9]+\)\.", text)
+          print(stages[-1] if stages and stages[-1] in allowed else "unknown")
+          PY
+          )"
+            printf '::error title=Real acceptance failed::The isolated runner failed during %s (exit %s). Raw diagnostics were withheld and not uploaded.\n' "$stage" "$status"
             {
               printf '### Real browser/API acceptance failed\n\n'
-              printf 'The scenario exited with status `%s`. Raw output was withheld and no runner logs or artifacts were uploaded.\n\n' "$status"
+              printf 'Failure stage: `%s`; exit status: `%s`. Raw output was withheld and no runner logs or artifacts were uploaded.\n\n' "$stage" "$status"
               printf 'Reproduce locally with `cd web && npm run test:acceptance:local` after installing the documented dependencies.\n'
             } >> "$GITHUB_STEP_SUMMARY"
             exit "$status"

@@ -72,6 +72,7 @@ def test_exported_runtime_openapi_has_expected_routes_and_is_reproducible(
     assert _schema_ref(sync, "200") == "#/components/schemas/CourierSyncResponse"
     assert _schema_ref(sync, "409") == "#/components/schemas/APIErrorResponse"
     assert _schema_ref(sync, "422") == "#/components/schemas/APIErrorResponse"
+    assert "429" not in sync["responses"]
 
     workflow_operations = {
         "/api/v1/shipments/{shipment_id}/handoffs/pickup/confirm-release": (
@@ -95,6 +96,7 @@ def test_exported_runtime_openapi_has_expected_routes_and_is_reproducible(
     }
     for path, (method, request_model) in workflow_operations.items():
         operation = paths[path][method]
+        assert "429" not in operation["responses"]
         assert operation["requestBody"]["content"]["application/json"]["schema"]["$ref"] == (
             f"#/components/schemas/{request_model}"
         )
