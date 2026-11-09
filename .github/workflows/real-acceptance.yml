@@ -154,7 +154,7 @@ jobs:
           print(last)
           PY
           )"
-            printf '::error title=Real acceptance failed::The isolated runner failed during %s (exit %s). Raw diagnostics were withheld and not uploaded.\n' "$stage" "$status"
+            printf '::error title=Real acceptance failed::The isolated runner failed during %s (exit %s; last safe checkpoint: %s). Raw diagnostics were withheld and not uploaded.\n' "$stage" "$status" "$checkpoint"
             {
               printf '### Real browser/API acceptance failed\n\n'
               printf 'Failure stage: `%s`; last safe checkpoint: `%s`; exit status: `%s`. Raw output was withheld and no runner logs or artifacts were uploaded.\n\n' "$stage" "$checkpoint" "$status"
