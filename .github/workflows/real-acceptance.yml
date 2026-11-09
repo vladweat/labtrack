@@ -138,19 +138,29 @@ jobs:
               failure_class = "playwright_assertion"
           elif re.search(r"Error: (?:page|browserType|chromium)\.", text):
               failure_class = "browser_runtime"
+          elif re.search(r"\b(?:TypeError|ReferenceError|SyntaxError):", text):
+              failure_class = "playwright_runtime_error"
+          elif re.search(r"\b(?:ECONNREFUSED|EADDRINUSE|ETIMEDOUT)\b", text):
+              failure_class = "local_service_error"
           elif "Local acceptance diagnostics:" in text:
               failure_class = "runtime_diagnostics"
           else:
               failure_class = "scenario_failed"
+          source_lines = re.findall(
+              r"(?:^|[/\\])local_real_acceptance\.spec\.ts:(\d+):\d+\b",
+              text,
+              re.MULTILINE,
+          )
+          source_line = source_lines[-1] if source_lines else "unavailable"
           stage = stage_by_checkpoint[checkpoint]
-          print("\t".join((stage, checkpoint, failure_class)))
+          print("\t".join((stage, checkpoint, failure_class, source_line)))
           PY
           )"
-            IFS=$'\t' read -r stage checkpoint failure_class <<< "$diagnostic"
-            printf '::error title=Real acceptance failed::The isolated runner failed during %s (category %s; exit %s; last safe checkpoint: %s). Raw diagnostics were withheld and not uploaded.\n' "$stage" "$failure_class" "$status" "$checkpoint"
+            IFS=$'\t' read -r stage checkpoint failure_class source_line <<< "$diagnostic"
+            printf '::error title=Real acceptance failed::The isolated runner failed during %s (category %s; test source line %s; exit %s; last safe checkpoint: %s). Raw diagnostics were withheld and not uploaded.\n' "$stage" "$failure_class" "$source_line" "$status" "$checkpoint"
             {
               printf '### Real browser/API acceptance failed\n\n'
-              printf 'Failure stage: `%s`; category: `%s`; last safe checkpoint: `%s`; exit status: `%s`. Raw output was withheld and no runner logs or artifacts were uploaded.\n\n' "$stage" "$failure_class" "$checkpoint" "$status"
+              printf 'Failure stage: `%s`; category: `%s`; test source line: `%s`; last safe checkpoint: `%s`; exit status: `%s`. Raw output was withheld and no runner logs or artifacts were uploaded.\n\n' "$stage" "$failure_class" "$source_line" "$checkpoint" "$status"
               printf 'Reproduce locally with `cd web && npm run test:acceptance:local` after installing the documented dependencies.\n'
             } >> "$GITHUB_STEP_SUMMARY"
             exit "$status"
