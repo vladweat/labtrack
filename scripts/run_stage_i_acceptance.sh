@@ -52,6 +52,7 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+printf 'Local acceptance runner started.\n'
 
 current_stage="preflight_commands"
 for command_name in docker python3 setsid; do
