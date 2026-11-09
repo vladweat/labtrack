@@ -174,10 +174,26 @@ jobs:
           print(matches[-1] if matches else "unavailable")
           PY
           )"
-            printf '::error title=Real acceptance failed::The isolated runner failed during %s (exit %s; last safe checkpoint: %s; test source line: %s). Raw diagnostics were withheld and not uploaded.\n' "$stage" "$status" "$checkpoint" "$failure_line"
+            failure_class="$(python3 - "$test_log" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          text = Path(sys.argv[1]).read_text(errors="replace")
+          if re.search(r"Test timeout of [0-9]+ms exceeded", text):
+              print("playwright_timeout")
+          elif re.search(r"Error: expect\([^\n]+ failed", text):
+              print("playwright_assertion")
+          elif "Local acceptance diagnostics:" in text:
+              print("runtime_diagnostics")
+          else:
+              print("scenario_failed")
+          PY
+          )"
+            printf '::error title=Real acceptance failed::The isolated runner failed during %s (category %s; exit %s; last safe checkpoint: %s; test source line: %s). Raw diagnostics were withheld and not uploaded.\n' "$stage" "$failure_class" "$status" "$checkpoint" "$failure_line"
             {
               printf '### Real browser/API acceptance failed\n\n'
-              printf 'Failure stage: `%s`; last safe checkpoint: `%s`; test source line: `%s`; exit status: `%s`. Raw output was withheld and no runner logs or artifacts were uploaded.\n\n' "$stage" "$checkpoint" "$failure_line" "$status"
+              printf 'Failure stage: `%s`; category: `%s`; last safe checkpoint: `%s`; test source line: `%s`; exit status: `%s`. Raw output was withheld and no runner logs or artifacts were uploaded.\n\n' "$stage" "$failure_class" "$checkpoint" "$failure_line" "$status"
               printf 'Reproduce locally with `cd web && npm run test:acceptance:local` after installing the documented dependencies.\n'
             } >> "$GITHUB_STEP_SUMMARY"
             exit "$status"
