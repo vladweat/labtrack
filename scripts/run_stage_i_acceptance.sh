@@ -100,11 +100,22 @@ cleanup() {
     kill -TERM "$api_pid" >/dev/null 2>&1 || true
     wait "$api_pid" >/dev/null 2>&1 || true
   fi
+  # postgres:15 adds the sticky bit to the mounted socket directory; clear it
+  # so the host runner can unlink the container-owned socket files below.
+  docker exec --user postgres "$container_name" chmod 0777 /var/run/postgresql >/dev/null 2>&1 || true
   docker rm -f "$container_name" >/dev/null 2>&1 || true
   if [[ "$node_modules_link_created" == 1 ]]; then
-    rm -f -- "$web_dir/node_modules"
+    if ! rm -f -- "$web_dir/node_modules"; then
+      printf 'Stage I acceptance cleanup failed.\n' >&2
+      status=1
+    fi
   fi
-  rm -rf -- "$work_dir"
+  if ! rm -rf -- "$work_dir"; then
+    printf 'Stage I acceptance cleanup failed.\n' >&2
+    status=1
+  else
+    printf 'Stage I acceptance cleanup completed.\n'
+  fi
   exit "$status"
 }
 trap cleanup EXIT
@@ -429,7 +440,11 @@ fi
 printf 'API: ready on 127.0.0.1; Vite will use its existing loopback proxy.\n'
 
 run_playwright() {
-  setsid env -i PATH="$PATH" HOME="${HOME:-/root}" bash --noprofile --norc -c '
+  setsid env -i \
+    PATH="$PATH" \
+    HOME="${HOME:-/root}" \
+    LABTRACK_ACCEPTANCE_REPORTER="${LABTRACK_ACCEPTANCE_REPORTER:-list}" \
+    bash --noprofile --norc -c '
     environment_file=$1
     web_dir=$2
     playwright_cli=$3

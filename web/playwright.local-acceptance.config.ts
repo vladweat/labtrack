@@ -11,6 +11,7 @@ const apiProxyTarget = process.env.API_PROXY_TARGET ?? 'http://127.0.0.1:18000';
 const baseURL = `http://127.0.0.1:${webPort}`;
 const proxyUrl = new URL(apiProxyTarget);
 const outputDir = process.env.LABTRACK_ACCEPTANCE_OUTPUT_DIR;
+const acceptanceReporter = process.env.LABTRACK_ACCEPTANCE_REPORTER ?? 'list';
 
 if (!Number.isInteger(webPort) || webPort < 1 || webPort > 65535) {
   throw new Error('LABTRACK_ACCEPTANCE_WEB_PORT must be a valid TCP port.');
@@ -21,6 +22,9 @@ if (proxyUrl.protocol !== 'http:' || !['127.0.0.1', 'localhost', '::1'].includes
 if (!outputDir || !outputDir.startsWith('/')) {
   throw new Error('LABTRACK_ACCEPTANCE_OUTPUT_DIR must point to an absolute temporary directory.');
 }
+if (!['list', 'json'].includes(acceptanceReporter)) {
+  throw new Error('LABTRACK_ACCEPTANCE_REPORTER must be list or json.');
+}
 
 export default defineConfig({
   testDir: './e2e',
@@ -30,7 +34,7 @@ export default defineConfig({
   forbidOnly: true,
   retries: 0,
   workers: 1,
-  reporter: 'list',
+  reporter: acceptanceReporter,
   use: {
     ...devices['Desktop Chrome'],
     baseURL,

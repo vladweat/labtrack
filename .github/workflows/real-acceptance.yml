@@ -1,7 +1,9 @@
 name: Real browser/API acceptance
 
 on:
-  pull_request:
+  push:
+    branches:
+      - main
     paths:
       - "backend/**"
       - "web/**"
@@ -9,6 +11,7 @@ on:
       - ".github/workflows/real-acceptance.yml"
       - "docs/development.md"
       - ".env.example"
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -26,6 +29,7 @@ jobs:
     env:
       LABTRACK_PYTHON_BIN: ${{ github.workspace }}/backend/.venv/bin/python
       LABTRACK_WEB_NODE_MODULES: ${{ github.workspace }}/web/node_modules
+      LABTRACK_ACCEPTANCE_REPORTER: json
     defaults:
       run:
         working-directory: web
@@ -70,6 +74,31 @@ jobs:
         timeout-minutes: 5
         run: docker pull postgres:15
 
+      - name: Verify offline acceptance prerequisites
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          for required in docker python3 setsid; do
+            if ! command -v "$required" >/dev/null 2>&1; then
+              printf 'Missing acceptance runner command: %s.\n' "$required"
+              exit 1
+            fi
+          done
+          if [[ ! -x "$LABTRACK_PYTHON_BIN" ]]; then
+            printf 'Configured backend interpreter is not executable.\n'
+            exit 1
+          fi
+          if [[ ! -x "$LABTRACK_WEB_NODE_MODULES/.bin/playwright" ]]; then
+            printf 'Installed Playwright CLI is unavailable.\n'
+            exit 1
+          fi
+          image_id="$(docker image inspect --format '{{.Id}}' postgres:15 2>/dev/null || true)"
+          if [[ ! "$image_id" =~ ^sha256:[[:xdigit:]]{64}$ ]]; then
+            printf 'Cached postgres:15 image is unavailable.\n'
+            exit 1
+          fi
+          printf 'Offline acceptance prerequisites verified.\n'
+
       - name: Run the real local acceptance scenario
         timeout-minutes: 15
         run: |
@@ -80,6 +109,201 @@ jobs:
             printf 'Real Sender → Courier → Lab browser/API acceptance passed.\n'
           else
             status=$?
-            printf '::error title=Real acceptance failed::The real acceptance scenario exited with status %s. Raw diagnostics were withheld and not uploaded; rerun locally to inspect the runner diagnostics.\n' "$status"
+            diagnostic="$(python3 - "$test_log" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+          import json
+
+          text = Path(sys.argv[1]).read_text(errors="replace")
+          checkpoints = {
+              "Stage I acceptance: fresh PostgreSQL, network none, no published container ports.": "postgres_startup_started",
+              "Migrations: head applied; current/head/schema check passed.": "migrations_complete",
+              "Runtime-role privileges and local organization scopes: passed.": "runtime_role_check_complete",
+              "Local role CLI: created five fixtures, then reported five unchanged; output contains no credentials.": "provisioning_complete",
+              "API: ready on 127.0.0.1; Vite will use its existing loopback proxy.": "api_ready",
+          }
+          checkpoint = "runner_not_started"
+          for line in text.splitlines():
+              checkpoint = checkpoints.get(line.strip(), checkpoint)
+          stage_by_checkpoint = {
+              "runner_not_started": "runner_startup",
+              "postgres_startup_started": "postgres_startup",
+              "migrations_complete": "runtime_role_check",
+              "runtime_role_check_complete": "fixture_setup",
+              "provisioning_complete": "api_startup",
+              "api_ready": "browser_api",
+          }
+          def find_json_report():
+              decoder = json.JSONDecoder()
+              for match in re.finditer(r"\{", text):
+                  try:
+                      report, _ = decoder.raw_decode(text[match.start():])
+                  except json.JSONDecodeError:
+                      continue
+                  if isinstance(report, dict) and all(
+                      key in report for key in ("config", "suites", "stats")
+                  ):
+                      return report
+              return None
+
+          def report_failures(report):
+              if not report:
+                  return []
+              failures = [(error, None) for error in report.get("errors", [])]
+
+              def visit(suites):
+                  for suite in suites:
+                      for spec in suite.get("specs", []):
+                          for test in spec.get("tests", []):
+                              for result in test.get("results", []):
+                                  found_error = False
+                                  for error in result.get("errors", []):
+                                      failures.append((error, result.get("errorLocation")))
+                                      found_error = True
+                                  if result.get("error"):
+                                      failures.append((result["error"], result.get("errorLocation")))
+                                      found_error = True
+                                  if not found_error and result.get("status") not in ("passed", "skipped"):
+                                      failures.append((
+                                          {"message": "", "status": result.get("status", "unknown")},
+                                          result.get("errorLocation"),
+                                      ))
+                      visit(suite.get("suites", []))
+
+              visit(report.get("suites", []))
+              return failures
+
+          def report_state(report):
+              if not report:
+                  return "missing"
+              statuses = []
+
+              def visit(suites):
+                  for suite in suites:
+                      for spec in suite.get("specs", []):
+                          for test in spec.get("tests", []):
+                              statuses.extend(
+                                  result.get("status", "unknown")
+                                  for result in test.get("results", [])
+                              )
+                      visit(suite.get("suites", []))
+
+              visit(report.get("suites", []))
+              if not statuses:
+                  return "no_results"
+              safe_statuses = {
+                  "passed": "passed",
+                  "failed": "failed",
+                  "timedOut": "timed_out",
+                  "skipped": "skipped",
+                  "interrupted": "interrupted",
+              }
+              mapped = {safe_statuses.get(status, "other") for status in statuses}
+              return mapped.pop() if len(mapped) == 1 else "mixed"
+
+          def classify_error(error):
+              message = error.get("message", "") if isinstance(error, dict) else str(error)
+              status = error.get("status", "") if isinstance(error, dict) else ""
+              if status in ("timedOut", "interrupted"):
+                  return "playwright_" + status.lower()
+              if status == "failed":
+                  return "playwright_failure_without_error"
+              if re.search(r"Test timeout of [0-9]+ms exceeded", message):
+                  return "playwright_timeout"
+              if re.search(r"expect\(", message):
+                  return "playwright_assertion"
+              if re.search(
+                  r"browserType\.launch|Executable doesn't exist|Failed to launch|"
+                  r"Missing X server|Target closed|browser has been closed",
+                  message,
+                  re.IGNORECASE,
+              ):
+                  return "browser_launch_or_fixture"
+              if re.search(r"ECONNREFUSED|EADDRINUSE|ETIMEDOUT|net::ERR_", message):
+                  return "local_service_error"
+              if re.search(r"\b(?:TypeError|ReferenceError|SyntaxError):", message):
+                  return "playwright_runtime_error"
+              if re.search(r"(?:browser|context|page|locator|frame)\.[A-Za-z]", message):
+                  return "browser_interaction"
+              return "playwright_error"
+
+          report = find_json_report()
+          failures = report_failures(report)
+          reporter_state = report_state(report)
+          if "Stage I acceptance cleanup failed." in text:
+              runner_state = "cleanup_failed"
+          elif "Stage I acceptance cleanup completed." in text:
+              if "Real browser acceptance passed." in text:
+                  runner_state = "passed_cleanup"
+              else:
+                  runner_state = "failed_cleanup"
+          elif "Real browser acceptance passed." in text:
+              runner_state = "passed_marker"
+          elif "FastAPI local request log for the failed browser run:" in text:
+              runner_state = "failed_marker"
+          else:
+              runner_state = "no_terminal_marker"
+          if failures:
+              failure, error_location = failures[0]
+              failure_class = classify_error(failure)
+              error_location = error_location or {}
+              if not error_location and isinstance(failure, dict):
+                  error_location = failure.get("location", {})
+              error_location = error_location or {}
+              error_line = error_location.get("line")
+              source_line = str(error_line) if isinstance(error_line, int) and error_line > 107 else "unavailable"
+          elif re.search(r"Test timeout of [0-9]+ms exceeded", text):
+              failure_class = "playwright_timeout"
+          elif re.search(r"Error: expect\(", text):
+              failure_class = "playwright_assertion"
+          elif re.search(r"Error: (?:page|browser|browserType|chromium|locator)\.", text):
+              failure_class = "browser_runtime"
+          elif re.search(r"\b(?:TypeError|ReferenceError|SyntaxError):", text):
+              failure_class = "playwright_runtime_error"
+          elif re.search(r"\b(?:ECONNREFUSED|EADDRINUSE|ETIMEDOUT)\b", text):
+              failure_class = "local_service_error"
+          elif "Local acceptance diagnostics:" in text:
+              failure_class = "runtime_diagnostics"
+          elif report is None:
+              failure_class = "playwright_report_missing"
+          elif reporter_state == "no_results":
+              failure_class = "playwright_report_without_results"
+          elif reporter_state == "skipped":
+              failure_class = "playwright_report_skipped"
+          elif reporter_state == "passed" and runner_state == "cleanup_failed":
+              failure_class = "runner_cleanup_failed"
+          elif reporter_state == "passed" and runner_state == "passed_cleanup":
+              failure_class = "runner_exit_after_successful_cleanup"
+          elif reporter_state == "passed" and runner_state in ("failed_marker", "failed_cleanup"):
+              failure_class = "playwright_exit_after_pass_report"
+          elif reporter_state == "passed" and runner_state == "no_terminal_marker":
+              failure_class = "runner_failed_after_pass_report"
+          elif reporter_state == "passed":
+              failure_class = "playwright_report_passed_but_command_failed"
+          elif not failures:
+              failure_class = "playwright_report_without_error"
+          else:
+              failure_class = "scenario_failed"
+          if not failures:
+              source_lines = re.findall(
+                  r"(?:^|[/\\])local_real_acceptance\.spec\.ts:(\d+):\d+\b",
+                  text,
+                  re.MULTILINE,
+              )
+              source_line = source_lines[-1] if source_lines else "unavailable"
+              if source_line.isdigit() and int(source_line) <= 107:
+                  source_line = "unavailable"
+          stage = stage_by_checkpoint[checkpoint]
+          print("\t".join((stage, checkpoint, failure_class, source_line, reporter_state, runner_state)))
+          PY
+          )"
+            IFS=$'\t' read -r stage checkpoint failure_class source_line report_state runner_state <<< "$diagnostic"
+            printf '::error title=Real acceptance failed::The isolated runner failed during %s (category %s; reporter %s; runner %s; test source line %s; exit %s; last safe checkpoint: %s). Raw diagnostics were withheld and not uploaded.\n' "$stage" "$failure_class" "$report_state" "$runner_state" "$source_line" "$status" "$checkpoint"
+            {
+              printf '### Real browser/API acceptance failed\n\n'
+              printf 'Failure stage: `%s`; category: `%s`; reporter: `%s`; runner: `%s`; test source line: `%s`; last safe checkpoint: `%s`; exit status: `%s`. Raw output was withheld and no runner logs or artifacts were uploaded.\n\n' "$stage" "$failure_class" "$report_state" "$runner_state" "$source_line" "$checkpoint" "$status"
+              printf 'Reproduce locally with `cd web && npm run test:acceptance:local` after installing the documented dependencies.\n'
+            } >> "$GITHUB_STEP_SUMMARY"
             exit "$status"
           fi

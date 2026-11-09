@@ -2,13 +2,12 @@ name: Backend checks
 
 on:
   push:
+    branches:
+      - main
     paths:
       - "backend/**"
       - ".github/workflows/backend.yml"
   pull_request:
-    paths:
-      - "backend/**"
-      - ".github/workflows/backend.yml"
 
 jobs:
   backend:
