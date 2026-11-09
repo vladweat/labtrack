@@ -182,8 +182,10 @@ jobs:
           text = Path(sys.argv[1]).read_text(errors="replace")
           if re.search(r"Test timeout of [0-9]+ms exceeded", text):
               print("playwright_timeout")
-          elif re.search(r"Error: expect\([^\n]+ failed", text):
+          elif re.search(r"Error: expect\(", text):
               print("playwright_assertion")
+          elif re.search(r"Error: (?:page|browserType|chromium)\.", text):
+              print("browser_runtime")
           elif "Local acceptance diagnostics:" in text:
               print("runtime_diagnostics")
           else:
