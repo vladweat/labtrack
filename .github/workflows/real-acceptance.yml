@@ -73,6 +73,31 @@ jobs:
         timeout-minutes: 5
         run: docker pull postgres:15
 
+      - name: Verify offline acceptance prerequisites
+        timeout-minutes: 2
+        run: |
+          set -euo pipefail
+          for required in docker python3 setsid; do
+            if ! command -v "$required" >/dev/null 2>&1; then
+              printf 'Missing acceptance runner command: %s.\n' "$required"
+              exit 1
+            fi
+          done
+          if [[ ! -x "$LABTRACK_PYTHON_BIN" ]]; then
+            printf 'Configured backend interpreter is not executable.\n'
+            exit 1
+          fi
+          if [[ ! -x "$LABTRACK_WEB_NODE_MODULES/.bin/playwright" ]]; then
+            printf 'Installed Playwright CLI is unavailable.\n'
+            exit 1
+          fi
+          image_id="$(docker image inspect --format '{{.Id}}' postgres:15 2>/dev/null || true)"
+          if [[ ! "$image_id" =~ ^sha256:[[:xdigit:]]{64}$ ]]; then
+            printf 'Cached postgres:15 image is unavailable.\n'
+            exit 1
+          fi
+          printf 'Offline acceptance prerequisites verified.\n'
+
       - name: Run the real local acceptance scenario
         timeout-minutes: 15
         run: |
