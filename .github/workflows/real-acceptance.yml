@@ -29,6 +29,7 @@ jobs:
     env:
       LABTRACK_PYTHON_BIN: ${{ github.workspace }}/backend/.venv/bin/python
       LABTRACK_WEB_NODE_MODULES: ${{ github.workspace }}/web/node_modules
+      LABTRACK_ACCEPTANCE_REPORTER: json
     defaults:
       run:
         working-directory: web
@@ -112,6 +113,7 @@ jobs:
           from pathlib import Path
           import re
           import sys
+          import json
 
           text = Path(sys.argv[1]).read_text(errors="replace")
           checkpoints = {
@@ -132,11 +134,75 @@ jobs:
               "provisioning_complete": "api_startup",
               "api_ready": "browser_api",
           }
-          if re.search(r"Test timeout of [0-9]+ms exceeded", text):
+          def find_json_report():
+              decoder = json.JSONDecoder()
+              for match in re.finditer(r"\{", text):
+                  try:
+                      report, _ = decoder.raw_decode(text[match.start():])
+                  except json.JSONDecodeError:
+                      continue
+                  if isinstance(report, dict) and all(
+                      key in report for key in ("config", "suites", "stats")
+                  ):
+                      return report
+              return None
+
+          def report_failures(report):
+              if not report:
+                  return []
+              failures = [(error, None) for error in report.get("errors", [])]
+
+              def visit(suites):
+                  for suite in suites:
+                      for spec in suite.get("specs", []):
+                          for test in spec.get("tests", []):
+                              for result in test.get("results", []):
+                                  for error in result.get("errors", []):
+                                      failures.append((error, result.get("errorLocation")))
+                                  if result.get("error"):
+                                      failures.append((result["error"], result.get("errorLocation")))
+                      visit(suite.get("suites", []))
+
+              visit(report.get("suites", []))
+              return failures
+
+          def classify_error(error):
+              message = error.get("message", "") if isinstance(error, dict) else str(error)
+              if re.search(r"Test timeout of [0-9]+ms exceeded", message):
+                  return "playwright_timeout"
+              if re.search(r"expect\(", message):
+                  return "playwright_assertion"
+              if re.search(
+                  r"browserType\.launch|Executable doesn't exist|Failed to launch|"
+                  r"Missing X server|Target closed|browser has been closed",
+                  message,
+                  re.IGNORECASE,
+              ):
+                  return "browser_launch_or_fixture"
+              if re.search(r"ECONNREFUSED|EADDRINUSE|ETIMEDOUT|net::ERR_", message):
+                  return "local_service_error"
+              if re.search(r"\b(?:TypeError|ReferenceError|SyntaxError):", message):
+                  return "playwright_runtime_error"
+              if re.search(r"(?:browser|context|page|locator|frame)\.[A-Za-z]", message):
+                  return "browser_interaction"
+              return "playwright_error"
+
+          report = find_json_report()
+          failures = report_failures(report)
+          if failures:
+              failure, error_location = failures[0]
+              failure_class = classify_error(failure)
+              error_location = error_location or {}
+              if not error_location and isinstance(failure, dict):
+                  error_location = failure.get("location", {})
+              error_location = error_location or {}
+              error_line = error_location.get("line")
+              source_line = str(error_line) if isinstance(error_line, int) and error_line > 107 else "unavailable"
+          elif re.search(r"Test timeout of [0-9]+ms exceeded", text):
               failure_class = "playwright_timeout"
           elif re.search(r"Error: expect\(", text):
               failure_class = "playwright_assertion"
-          elif re.search(r"Error: (?:page|browserType|chromium)\.", text):
+          elif re.search(r"Error: (?:page|browser|browserType|chromium|locator)\.", text):
               failure_class = "browser_runtime"
           elif re.search(r"\b(?:TypeError|ReferenceError|SyntaxError):", text):
               failure_class = "playwright_runtime_error"
@@ -146,12 +212,15 @@ jobs:
               failure_class = "runtime_diagnostics"
           else:
               failure_class = "scenario_failed"
-          source_lines = re.findall(
-              r"(?:^|[/\\])local_real_acceptance\.spec\.ts:(\d+):\d+\b",
-              text,
-              re.MULTILINE,
-          )
-          source_line = source_lines[-1] if source_lines else "unavailable"
+          if not failures:
+              source_lines = re.findall(
+                  r"(?:^|[/\\])local_real_acceptance\.spec\.ts:(\d+):\d+\b",
+                  text,
+                  re.MULTILINE,
+              )
+              source_line = source_lines[-1] if source_lines else "unavailable"
+              if source_line.isdigit() and int(source_line) <= 107:
+                  source_line = "unavailable"
           stage = stage_by_checkpoint[checkpoint]
           print("\t".join((stage, checkpoint, failure_class, source_line)))
           PY

@@ -429,7 +429,11 @@ fi
 printf 'API: ready on 127.0.0.1; Vite will use its existing loopback proxy.\n'
 
 run_playwright() {
-  setsid env -i PATH="$PATH" HOME="${HOME:-/root}" bash --noprofile --norc -c '
+  setsid env -i \
+    PATH="$PATH" \
+    HOME="${HOME:-/root}" \
+    LABTRACK_ACCEPTANCE_REPORTER="${LABTRACK_ACCEPTANCE_REPORTER:-list}" \
+    bash --noprofile --norc -c '
     environment_file=$1
     web_dir=$2
     playwright_cli=$3
