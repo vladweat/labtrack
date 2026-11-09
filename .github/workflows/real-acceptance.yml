@@ -231,7 +231,14 @@ jobs:
           report = find_json_report()
           failures = report_failures(report)
           reporter_state = report_state(report)
-          if "Real browser acceptance passed." in text:
+          if "Stage I acceptance cleanup failed." in text:
+              runner_state = "cleanup_failed"
+          elif "Stage I acceptance cleanup completed." in text:
+              if "Real browser acceptance passed." in text:
+                  runner_state = "passed_cleanup"
+              else:
+                  runner_state = "failed_cleanup"
+          elif "Real browser acceptance passed." in text:
               runner_state = "passed_marker"
           elif "FastAPI local request log for the failed browser run:" in text:
               runner_state = "failed_marker"
@@ -264,7 +271,11 @@ jobs:
               failure_class = "playwright_report_without_results"
           elif reporter_state == "skipped":
               failure_class = "playwright_report_skipped"
-          elif reporter_state == "passed" and runner_state == "failed_marker":
+          elif reporter_state == "passed" and runner_state == "cleanup_failed":
+              failure_class = "runner_cleanup_failed"
+          elif reporter_state == "passed" and runner_state == "passed_cleanup":
+              failure_class = "runner_exit_after_successful_cleanup"
+          elif reporter_state == "passed" and runner_state in ("failed_marker", "failed_cleanup"):
               failure_class = "playwright_exit_after_pass_report"
           elif reporter_state == "passed" and runner_state == "no_terminal_marker":
               failure_class = "runner_failed_after_pass_report"

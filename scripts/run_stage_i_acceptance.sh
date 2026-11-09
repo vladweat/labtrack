@@ -102,9 +102,17 @@ cleanup() {
   fi
   docker rm -f "$container_name" >/dev/null 2>&1 || true
   if [[ "$node_modules_link_created" == 1 ]]; then
-    rm -f -- "$web_dir/node_modules"
+    if ! rm -f -- "$web_dir/node_modules"; then
+      printf 'Stage I acceptance cleanup failed.\n' >&2
+      status=1
+    fi
   fi
-  rm -rf -- "$work_dir"
+  if ! rm -rf -- "$work_dir"; then
+    printf 'Stage I acceptance cleanup failed.\n' >&2
+    status=1
+  else
+    printf 'Stage I acceptance cleanup completed.\n'
+  fi
   exit "$status"
 }
 trap cleanup EXIT
