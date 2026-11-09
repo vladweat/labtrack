@@ -170,8 +170,8 @@ jobs:
           import sys
 
           text = Path(sys.argv[1]).read_text(errors="replace")
-          match = re.search(r"e2e/local_real_acceptance\.spec\.ts:(\d+):\d+", text)
-          print(match.group(1) if match else "unavailable")
+          matches = re.findall(r"e2e/local_real_acceptance\.spec\.ts:(\d+):\d+", text)
+          print(matches[-1] if matches else "unavailable")
           PY
           )"
             printf '::error title=Real acceptance failed::The isolated runner failed during %s (exit %s; last safe checkpoint: %s; test source line: %s). Raw diagnostics were withheld and not uploaded.\n' "$stage" "$status" "$checkpoint" "$failure_line"
