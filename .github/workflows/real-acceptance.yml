@@ -154,10 +154,30 @@ jobs:
           print(last)
           PY
           )"
-            printf '::error title=Real acceptance failed::The isolated runner failed during %s (exit %s; last safe checkpoint: %s). Raw diagnostics were withheld and not uploaded.\n' "$stage" "$status" "$checkpoint"
+            if [[ "$stage" == unknown ]]; then
+              case "$checkpoint" in
+                runner_started) stage="preflight_commands" ;;
+                postgres_startup) stage="postgres_startup" ;;
+                migrations_complete) stage="runtime_role_check" ;;
+                runtime_role_check_complete) stage="fixture_setup" ;;
+                provisioning_complete) stage="api_startup" ;;
+                api_ready) stage="browser_api" ;;
+              esac
+            fi
+            failure_line="$(python3 - "$test_log" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          text = Path(sys.argv[1]).read_text(errors="replace")
+          match = re.search(r"e2e/local_real_acceptance\.spec\.ts:(\d+):\d+", text)
+          print(match.group(1) if match else "unavailable")
+          PY
+          )"
+            printf '::error title=Real acceptance failed::The isolated runner failed during %s (exit %s; last safe checkpoint: %s; test source line: %s). Raw diagnostics were withheld and not uploaded.\n' "$stage" "$status" "$checkpoint" "$failure_line"
             {
               printf '### Real browser/API acceptance failed\n\n'
-              printf 'Failure stage: `%s`; last safe checkpoint: `%s`; exit status: `%s`. Raw output was withheld and no runner logs or artifacts were uploaded.\n\n' "$stage" "$checkpoint" "$status"
+              printf 'Failure stage: `%s`; last safe checkpoint: `%s`; test source line: `%s`; exit status: `%s`. Raw output was withheld and no runner logs or artifacts were uploaded.\n\n' "$stage" "$checkpoint" "$failure_line" "$status"
               printf 'Reproduce locally with `cd web && npm run test:acceptance:local` after installing the documented dependencies.\n'
             } >> "$GITHUB_STEP_SUMMARY"
             exit "$status"
