@@ -1,0 +1,85 @@
+name: Real browser/API acceptance
+
+on:
+  pull_request:
+    paths:
+      - "backend/**"
+      - "web/**"
+      - "scripts/**"
+      - ".github/workflows/real-acceptance.yml"
+      - "docs/development.md"
+      - ".env.example"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: real-acceptance-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  real-acceptance:
+    name: Sender → Courier → Lab real browser/API
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      LABTRACK_PYTHON_BIN: ${{ github.workspace }}/backend/.venv/bin/python
+      LABTRACK_WEB_NODE_MODULES: ${{ github.workspace }}/web/node_modules
+    defaults:
+      run:
+        working-directory: web
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install backend development dependencies
+        working-directory: backend
+        timeout-minutes: 10
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -e ".[dev]"
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        timeout-minutes: 10
+        run: npm ci
+
+      - name: Install Playwright Chromium and operating-system dependencies
+        timeout-minutes: 10
+        run: npx playwright install --with-deps chromium
+
+      - name: Cache the disposable PostgreSQL image
+        timeout-minutes: 5
+        run: docker pull postgres:15
+
+      - name: Run the real local acceptance scenario
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          test_log="$(mktemp "${RUNNER_TEMP:-/tmp}/real-acceptance.XXXXXX")"
+          trap 'rm -f "$test_log"' EXIT
+          if npm run test:acceptance:local >"$test_log" 2>&1; then
+            printf 'Real Sender → Courier → Lab browser/API acceptance passed.\n'
+          else
+            status=$?
+            printf '::error title=Real acceptance failed::The real acceptance scenario exited with status %s. Raw diagnostics were withheld and not uploaded; rerun locally to inspect the runner diagnostics.\n' "$status"
+            exit "$status"
+          fi

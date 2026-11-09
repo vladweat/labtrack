@@ -19,3 +19,4 @@ COPY --chown=labtrack:labtrack alembic /app/alembic
 COPY --chown=labtrack:labtrack alembic.ini /app/alembic.ini
 
 USER labtrack
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers"]

@@ -298,7 +298,7 @@ async def test_lab_operator_lists_only_shipments_for_its_destination_organizatio
     assert shipment_id not in {item["id"] for item in unrelated_sender_shipments.json()["items"]}
 
 
-def test_resource_discovery_openapi_matches_static_contract() -> None:
+def test_resource_discovery_openapi_conforms_to_historical_design_excerpt() -> None:
     contract_path = Path(__file__).resolve().parents[3] / "openapi" / "labtrack-v1.json"
     contract = json.loads(contract_path.read_text())
     runtime = app.openapi()

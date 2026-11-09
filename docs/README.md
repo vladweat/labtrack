@@ -10,8 +10,12 @@
 | Сервисы и границы модулей | [Архитектура](architecture.md) |
 | Модель данных и инварианты | [Данные и целостность](data-and-integrity.md) |
 | Courier PWA без сети | [Offline-синхронизация](offline-sync.md) |
+| Кадры локального synthetic walkthrough | [Галерея скриншотов](screenshots.md) |
 | Runtime endpoints и OpenAPI caveat | [API](api.md) |
 | Установка для разработки | [Локальная разработка](development.md) |
+| Synthetic demo и безопасный сброс | [Demo deployment](deploy.md) |
+| Backup/restore drill изолированной synthetic БД | [Backup/restore](backup-restore.md) |
+| Низкокардинальная workflow observability и runbook | [Observability](workflow-observability.md) |
 
 ## Утвержденные требования и проектные материалы
 
@@ -24,4 +28,4 @@
 - [API и операции v0.6.1](24-api-and-operations-v061.md) — продуктовые требования; точные runtime маршруты доступны в запущенном FastAPI `/docs`.
 - [План проверки](25-test-plan-v061.md) — приемочные требования, а не отчет о текущем запуске тестов.
 
-Доступные ранние материалы v0.5 и v0.6 сохранены как история проектирования; актуальная краткая навигация приведена выше. Статический [OpenAPI JSON](../openapi/labtrack-v1.json) — черновик v0.6.1, не полный runtime-контракт; подробности — в [документе API](api.md).
+Доступные ранние материалы v0.5 и v0.6 сохранены как история проектирования; актуальная краткая навигация приведена выше. [OpenAPI v0.6.1](../openapi/labtrack-v1.json) — исторический проектный черновик, не runtime-контракт. Генерация текущей схемы из `app.openapi()` и известные различия описаны в [документе API](api.md).

@@ -1,0 +1,18 @@
+services:
+  seed:
+    command: ["python", "-m", "app.cli", "seed-demo"]
+    environment:
+      APP_ENV: demo
+      DEMO_SEED_ENABLED: "true"
+      DEMO_API_URL: http://api:8000
+    networks: !override
+      - data
+    volumes: !override []
+
+volumes:
+  postgres_data:
+    name: ${DEMO_POSTGRES_VOLUME:-labtrack_demo_postgres_data}
+  caddy_data:
+    name: ${DEMO_CADDY_DATA_VOLUME:-labtrack_demo_caddy_data}
+  caddy_config:
+    name: ${DEMO_CADDY_CONFIG_VOLUME:-labtrack_demo_caddy_config}

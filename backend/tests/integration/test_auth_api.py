@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.core.config import get_settings
 from app.core.security import hash_password
 from app.main import app
 from app.modules.identity.models import Membership, Organization, Region, User
@@ -161,6 +162,7 @@ async def test_database_migration_revision_is_applied(database_sessions) -> None
 def login_limiter(monkeypatch):
     from app.core.login_rate_limit import LoginAttemptLimiter
 
+    monkeypatch.setattr(get_settings(), "login_trusted_proxy_networks", "")
     limiter = LoginAttemptLimiter(limit=2, window_seconds=900, clock=lambda: 50)
     monkeypatch.setattr(app.state, "login_attempt_limiter", limiter, raising=False)
     return limiter
@@ -245,10 +247,99 @@ async def test_successful_login_clears_previous_failures(database_sessions, logi
 
 
 @pytest.mark.asyncio
-async def test_limited_source_does_not_lock_another_source_out_of_shared_account(
+async def test_untrusted_peer_cannot_bypass_login_limit_by_changing_x_real_ip(
     database_sessions, login_limiter
 ) -> None:
     user, _ = await create_active_member(database_sessions)
+    transport = httpx.ASGITransport(app=app, client=("192.0.2.6", 1234))
+    credentials = {"email": user.email, "password": "correct horse battery staple"}
+    async with httpx.AsyncClient(transport=transport, base_url="http://labtrack.test") as client:
+        first = await client.post(
+            "/api/v1/auth/token",
+            headers={"X-Real-IP": "198.51.100.10"},
+            json={"email": "missing@example.test", "password": "wrong"},
+        )
+        second = await client.post(
+            "/api/v1/auth/token",
+            headers={"X-Real-IP": "198.51.100.11"},
+            json={"email": "missing@example.test", "password": "wrong"},
+        )
+        blocked = await client.post(
+            "/api/v1/auth/token",
+            headers={"X-Real-IP": "198.51.100.12"},
+            json=credentials,
+        )
+
+    assert first.status_code == second.status_code == 401
+    assert blocked.status_code == 429
+    assert blocked.headers["Retry-After"] == "900"
+
+
+@pytest.mark.asyncio
+async def test_trusted_proxy_uses_its_single_overwritten_real_ip_header(
+    database_sessions, login_limiter, monkeypatch
+) -> None:
+    user, _ = await create_active_member(database_sessions)
+    monkeypatch.setattr(get_settings(), "login_trusted_proxy_networks", "192.0.2.7/32")
+    transport = httpx.ASGITransport(app=app, client=("192.0.2.7", 1234))
+    credentials = {"email": user.email, "password": "correct horse battery staple"}
+    async with httpx.AsyncClient(transport=transport, base_url="http://labtrack.test") as client:
+        failed = [
+            await client.post(
+                "/api/v1/auth/token",
+                headers={"X-Real-IP": "198.51.100.20"},
+                json={"email": user.email, "password": "wrong"},
+            )
+            for _ in range(2)
+        ]
+        blocked_same_source = await client.post(
+            "/api/v1/auth/token",
+            headers={"X-Real-IP": "198.51.100.20"},
+            json=credentials,
+        )
+        other_source = await client.post(
+            "/api/v1/auth/token",
+            headers={"X-Real-IP": "198.51.100.21"},
+            json=credentials,
+        )
+
+    assert [response.status_code for response in failed] == [401, 401]
+    assert blocked_same_source.status_code == 429
+    assert other_source.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_default_login_limit_blocks_after_thirty_repeated_failures(
+    database_sessions, monkeypatch
+) -> None:
+    from app.core.login_rate_limit import LoginAttemptLimiter
+
+    user, _ = await create_active_member(database_sessions)
+    monkeypatch.setattr(get_settings(), "login_trusted_proxy_networks", "")
+    monkeypatch.setattr(app.state, "login_attempt_limiter", LoginAttemptLimiter(), raising=False)
+    transport = httpx.ASGITransport(app=app, client=("192.0.2.8", 1234))
+    credentials = {"email": user.email, "password": "correct horse battery staple"}
+    async with httpx.AsyncClient(transport=transport, base_url="http://labtrack.test") as client:
+        failures = [
+            await client.post(
+                "/api/v1/auth/token",
+                json={"email": "missing@example.test", "password": "wrong"},
+            )
+            for _ in range(30)
+        ]
+        blocked = await client.post("/api/v1/auth/token", json=credentials)
+
+    assert all(response.status_code == 401 for response in failures)
+    assert blocked.status_code == 429
+    assert blocked.headers["Retry-After"] == "900"
+
+
+@pytest.mark.asyncio
+async def test_limited_source_does_not_lock_another_source_out_of_shared_account(
+    database_sessions, login_limiter, monkeypatch
+) -> None:
+    user, _ = await create_active_member(database_sessions)
+    monkeypatch.setattr(get_settings(), "login_trusted_proxy_networks", "192.0.2.4/32")
     transport = httpx.ASGITransport(app=app, client=("192.0.2.4", 1234))
     credentials = {"email": user.email, "password": "correct horse battery staple"}
     async with httpx.AsyncClient(transport=transport, base_url="http://labtrack.test") as client:
@@ -277,6 +368,7 @@ async def test_parallel_bad_logins_enforce_source_limit_without_blocking_another
     from app.modules.identity import router as identity_router
 
     user, _ = await create_active_member(database_sessions)
+    monkeypatch.setattr(get_settings(), "login_trusted_proxy_networks", "192.0.2.5/32")
     first_verification_started = Event()
     release_failed_verifications = Event()
     verify_password = identity_router.verify_password

@@ -15,7 +15,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.api.v1.router import api_router
 from app.core.config import get_settings
 from app.core.errors import APIErrorResponse
-from app.core.logging import configure_logging, normalized_request_id, request_id_var
+from app.core.logging import (
+    configure_logging,
+    normalized_request_id,
+    record_custody_command_failure,
+    request_id_var,
+)
 from app.core.login_rate_limit import LoginAttemptLimiter
 from app.db.session import dispose_engine, get_engine
 
@@ -123,6 +128,8 @@ async def add_request_id(request: Request, call_next):
         route_template = getattr(route, "path", None)
         if not isinstance(route_template, str) or not route_template:
             route_template = "unmatched"
+        if response.status_code >= 400:
+            record_custody_command_failure(getattr(route, "name", None), response.status_code)
         logger.info(
             "request_completed",
             extra={

@@ -6,8 +6,9 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
+import app.core.logging as logging_setup
 from app.core.config import Settings
-from app.core.logging import JsonFormatter, request_id_var
+from app.core.logging import JsonFormatter, emit_telemetry_event, request_id_var
 
 
 def test_production_settings_require_a_non_default_jwt_secret() -> None:
@@ -81,3 +82,55 @@ def test_json_logs_include_request_correlation_without_credentials() -> None:
     assert "private-access-token" not in serialized
     assert "password" not in payload
     assert "access_token" not in payload
+
+
+def test_telemetry_event_uses_bounded_fields_and_omits_unapproved_values() -> None:
+    record = LogRecord(
+        name="app.telemetry",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=1,
+        msg="offline_sync_command",
+        args=(),
+        exc_info=None,
+    )
+    record.command_type = "pickup"
+    record.outcome = "applied"
+    record.reason_category = "none"
+    record.count = 1
+    record.shipment_id = str(uuid4())
+    record.email = "private@example.test"
+    context_token = request_id_var.set(f"request-{uuid4()}")
+    try:
+        payload = json.loads(JsonFormatter().format(record))
+    finally:
+        request_id_var.reset(context_token)
+
+    assert payload["message"] == "offline_sync_command"
+    assert payload["command_type"] == "pickup"
+    assert payload["outcome"] == "applied"
+    assert payload["reason_category"] == "none"
+    assert payload["count"] == 1
+    serialized = json.dumps(payload)
+    assert record.shipment_id not in serialized
+    assert record.email not in serialized
+    assert "shipment_id" not in payload
+    assert "email" not in payload
+
+
+def test_telemetry_logging_failure_is_suppressed(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FailingLogger:
+        def info(self, *_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("telemetry unavailable")
+
+    monkeypatch.setattr(
+        logging_setup.logging.getLogger("app.telemetry"), "info", FailingLogger().info
+    )
+
+    emit_telemetry_event(
+        "offline_sync_command",
+        command_type="pickup",
+        outcome="applied",
+        reason_category="none",
+        count=1,
+    )

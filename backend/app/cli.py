@@ -10,6 +10,7 @@ from uuid import UUID
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app.core.config import get_settings
+from app.core.demo_seed import DemoSeedNotAllowed
 from app.db.session import dispose_engine, get_session_factory
 from app.modules.idempotency.service import compact_offline_replays
 from app.modules.identity.local_role_fixtures import (
@@ -47,6 +48,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     commands.add_parser(
         "compact-offline-replays", help="compact Courier replay detail older than 90 days"
+    )
+    commands.add_parser(
+        "seed-demo",
+        help="seed synthetic Sender, Courier, Lab, and Shipment data in explicit demo mode",
     )
     return parser
 
@@ -113,6 +118,17 @@ async def _execute(args: argparse.Namespace, password: str | None) -> UUID | int
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "seed-demo":
+        from app.demo_seed import main as run_demo_seed
+
+        try:
+            return asyncio.run(run_demo_seed())
+        except (DemoSeedNotAllowed, ProvisioningError, RuntimeError, KeyError) as error:
+            print(f"Demo seed failed: {error}", file=sys.stderr)
+            return 2
+        except SQLAlchemyError:
+            print("Demo seed failed: database operation failed", file=sys.stderr)
+            return 2
     try:
         if args.command == "provision-local-roles":
             validate_local_role_target(get_settings(), os.environ)

@@ -4,10 +4,10 @@ import asyncio
 import math
 import time
 from collections import OrderedDict, deque
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from ipaddress import ip_address
+from ipaddress import IPv4Address, IPv4Network, IPv6Address, IPv6Network, ip_address
 from threading import Lock
 
 from fastapi import Request
@@ -116,17 +116,35 @@ class LoginAttemptLimiter:
             self._failures.pop(source_ip, None)
 
 
-def get_client_source_ip(request: Request) -> str:
-    """Use Caddy's overwritten source header, falling back to the ASGI client."""
+def get_client_source_ip(
+    request: Request,
+    *,
+    trusted_proxy_networks: Iterable[IPv4Network | IPv6Network] = (),
+) -> str:
+    """Use the transport peer unless it is an explicitly trusted proxy.
 
-    for candidate in (
-        request.headers.get("X-Real-IP"),
-        request.client.host if request.client else None,
-    ):
-        if candidate:
-            try:
-                return str(ip_address(candidate))
-            except ValueError:
-                pass
-    # Invalid or missing transport addresses share a single bounded bucket.
-    return "unknown"
+    A trusted proxy may provide one valid X-Real-IP value. The edge must
+    overwrite or remove client-supplied forwarding headers before this header
+    can be trusted. X-Forwarded-For is intentionally not used here.
+    """
+
+    transport_peer = request.client.host if request.client else None
+    try:
+        peer_ip = ip_address(transport_peer) if transport_peer else None
+    except ValueError:
+        peer_ip = None
+    if peer_ip is None:
+        # A forwarded value cannot replace a missing or malformed transport peer.
+        return "unknown"
+
+    if not any(peer_ip in network for network in trusted_proxy_networks):
+        return str(peer_ip)
+
+    candidates = request.headers.getlist("X-Real-IP")
+    if len(candidates) != 1:
+        return str(peer_ip)
+    try:
+        client_ip: IPv4Address | IPv6Address = ip_address(candidates[0])
+    except ValueError:
+        return str(peer_ip)
+    return str(client_ip)

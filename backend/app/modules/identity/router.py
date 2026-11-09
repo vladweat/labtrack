@@ -32,7 +32,10 @@ async def login(
 ) -> AccessTokenResponse:
     """Exchange credentials for a short-lived access token."""
 
-    source_ip = get_client_source_ip(http_request)
+    source_ip = get_client_source_ip(
+        http_request,
+        trusted_proxy_networks=settings.trusted_login_proxy_networks,
+    )
     limiter: LoginAttemptLimiter = http_request.app.state.login_attempt_limiter
     async with limiter.source_attempt_lock(source_ip):
         retry_after = limiter.retry_after(source_ip)

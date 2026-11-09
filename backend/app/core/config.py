@@ -1,9 +1,10 @@
 """Typed application settings loaded from the repository's local environment file."""
 
 from functools import lru_cache
+from ipaddress import IPv4Network, IPv6Network, ip_network
 from pathlib import Path
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL
 
@@ -23,6 +24,7 @@ class Settings(BaseSettings):
 
     app_name: str = "LabTrack API"
     app_env: str = "development"
+    demo_seed_enabled: bool = False
     postgres_db: str = "labtrack"
     postgres_user: str = "labtrack"
     postgres_password: SecretStr = SecretStr("labtrack-local-only-change-me")
@@ -39,10 +41,27 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     login_failed_attempt_limit: int = Field(default=30, gt=0)
     login_failed_window_seconds: int = Field(default=900, gt=0)
+    login_trusted_proxy_networks: str = ""
     stalled_pickup_seconds: int = Field(default=4 * 60 * 60, gt=0)
     stalled_delivery_seconds: int = Field(default=4 * 60 * 60, gt=0)
     stalled_proposal_seconds: int = Field(default=24 * 60 * 60, gt=0)
     stalled_notification_scan_seconds: int = Field(default=300, gt=0)
+
+    @field_validator("login_trusted_proxy_networks")
+    @classmethod
+    def normalize_login_trusted_proxy_networks(cls, value: str) -> str:
+        networks = []
+        try:
+            networks = [
+                str(ip_network(candidate.strip(), strict=False))
+                for candidate in value.split(",")
+                if candidate.strip()
+            ]
+        except ValueError as exc:
+            raise ValueError(
+                "LOGIN_TRUSTED_PROXY_NETWORKS must contain comma-separated IPs or CIDRs"
+            ) from exc
+        return ",".join(networks)
 
     @model_validator(mode="after")
     def require_secure_jwt_secret(self) -> "Settings":
@@ -91,6 +110,16 @@ class Settings(BaseSettings):
         return self._postgres_url(
             username=self.postgres_user,
             password=self.postgres_password.get_secret_value(),
+        )
+
+    @property
+    def trusted_login_proxy_networks(self) -> tuple[IPv4Network | IPv6Network, ...]:
+        """Return the explicitly trusted immediate peers for login source identity."""
+
+        return tuple(
+            ip_network(candidate, strict=False)
+            for candidate in self.login_trusted_proxy_networks.split(",")
+            if candidate
         )
 
 

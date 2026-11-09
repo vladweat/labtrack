@@ -1,6 +1,7 @@
 """PostgreSQL persistence and guard regressions for courier offline work."""
 
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -15,6 +16,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from test_pickup_api import create_pickup_fixture
 
 from app.core.config import get_settings
+from app.core.logging import JsonFormatter
 from app.core.security import hash_password
 from app.db.session import get_session_factory
 from app.main import app
@@ -50,7 +52,7 @@ async def authorize_unassigned_courier(
     return courier_id, {"Authorization": f"Bearer {login.json()['access_token']}"}
 
 
-def test_offline_manifest_runtime_openapi_matches_static_contract() -> None:
+def test_offline_manifest_runtime_openapi_conforms_to_historical_design_excerpt() -> None:
     contract_path = Path(__file__).resolve().parents[3] / "openapi" / "labtrack-v1.json"
     contract = json.loads(contract_path.read_text(encoding="utf-8"))
     generated = app.openapi()
@@ -770,6 +772,60 @@ async def sync_commands(client, context, commands):
     return response.json()["results"]
 
 
+@pytest.mark.asyncio
+async def test_sync_logs_applied_and_replayed_outcomes_without_private_values(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context, snapshot = await offline_ready(client)
+        command = pickup_command(snapshot)
+        with caplog.at_level(logging.INFO, logger="app.telemetry"):
+            applied = (await sync_commands(client, context, [command]))[0]
+            replayed = (await sync_commands(client, context, [command]))[0]
+
+    assert applied["outcome"] == "APPLIED"
+    assert replayed["outcome"] == "ALREADY_APPLIED"
+    assert replayed["original_outcome"] == "APPLIED"
+    assert await offline_counts(command["client_command_id"]) == (1, 1, 1)
+    events = [record for record in caplog.records if record.msg == "offline_sync_command"]
+    payloads = [json.loads(JsonFormatter().format(record)) for record in events]
+    assert [(item["outcome"], item["command_type"]) for item in payloads] == [
+        ("applied", "pickup"),
+        ("replayed", "pickup"),
+    ]
+    assert all(item["reason_category"] == "none" and item["count"] == 1 for item in payloads)
+    serialized = json.dumps(payloads)
+    for private_value in (
+        command["client_command_id"],
+        command["shipment_id"],
+        command["snapshot_id"],
+        command["container_codes"][0],
+    ):
+        assert private_value not in serialized
+
+
+@pytest.mark.asyncio
+async def test_sync_business_command_succeeds_when_telemetry_logger_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        context, snapshot = await offline_ready(client)
+        command = pickup_command(snapshot)
+        telemetry_logger = logging.getLogger("app.telemetry")
+        attempted_events: list[str] = []
+
+        def fail_telemetry(message: str, **_kwargs: object) -> None:
+            attempted_events.append(message)
+            raise RuntimeError("telemetry unavailable")
+
+        monkeypatch.setattr(telemetry_logger, "info", fail_telemetry)
+        result = (await sync_commands(client, context, [command]))[0]
+
+    assert result["outcome"] == "APPLIED"
+    assert attempted_events == ["offline_sync_command"]
+    assert await offline_counts(command["client_command_id"]) == (1, 1, 1)
+
+
 async def offline_counts(command_id):
     async with get_session_factory()() as session:
         return tuple(
@@ -822,16 +878,28 @@ async def test_sync_linked_pickup_delivery_replay_and_authoritative_time(split_b
 
 
 @pytest.mark.asyncio
-async def test_sync_missing_predecessor_is_retryable_then_applies_in_array_order():
+async def test_sync_missing_predecessor_is_retryable_then_applies_in_array_order(
+    caplog: pytest.LogCaptureFixture,
+):
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         context, snapshot = await offline_ready(client)
         pickup = pickup_command(snapshot)
         delivery = delivery_command(snapshot, predecessor=pickup["client_command_id"])
-        results = await sync_commands(client, context, [delivery, pickup])
+        with caplog.at_level(logging.INFO, logger="app.telemetry"):
+            results = await sync_commands(client, context, [delivery, pickup])
+            counts_before_retry = await offline_counts(delivery["client_command_id"])
+            retry = (await sync_commands(client, context, [delivery]))[0]
         assert [r["outcome"] for r in results] == ["RETRYABLE", "APPLIED"]
         assert results[0]["recorded_at"] is None
-        assert await offline_counts(delivery["client_command_id"]) == (0, 0, 0)
-        assert (await sync_commands(client, context, [delivery]))[0]["outcome"] == "APPLIED"
+        assert counts_before_retry == (0, 0, 0)
+        assert retry["outcome"] == "APPLIED"
+    events = [record for record in caplog.records if record.msg == "offline_sync_command"]
+    payloads = [json.loads(JsonFormatter().format(record)) for record in events]
+    assert [(item["outcome"], item["reason_category"]) for item in payloads] == [
+        ("retryable", "dependency"),
+        ("applied", "none"),
+        ("applied", "none"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -1177,7 +1245,7 @@ async def test_sync_compaction_preserves_tombstone_identity_replay_and_minimum_r
         )
 
 
-def test_sync_runtime_openapi_matches_static_contract():
+def test_sync_runtime_openapi_conforms_to_historical_design_excerpt():
     contract = json.loads(
         (Path(__file__).resolve().parents[3] / "openapi/labtrack-v1.json").read_text()
     )
@@ -1289,7 +1357,9 @@ async def test_sync_rejects_untrusted_snapshot_tokens_without_mutation(field):
 
 
 @pytest.mark.asyncio
-async def test_sync_definite_failure_after_mutation_rolls_back_before_recording(monkeypatch):
+async def test_sync_definite_failure_after_mutation_rolls_back_before_recording(
+    monkeypatch, caplog: pytest.LogCaptureFixture
+):
     from fastapi import HTTPException
 
     from app.modules.shipments import offline
@@ -1304,7 +1374,8 @@ async def test_sync_definite_failure_after_mutation_rolls_back_before_recording(
 
         monkeypatch.setattr(offline, "confirm_pickup_command", rejected_after_change)
         command = pickup_command(snapshot)
-        result = (await sync_commands(client, context, [command]))[0]
+        with caplog.at_level(logging.INFO, logger="app.telemetry"):
+            result = (await sync_commands(client, context, [command]))[0]
         assert result["outcome"] == "REJECTED"
         assert await offline_counts(command["client_command_id"]) == (1, 1, 1)
         async with get_session_factory()() as session:
@@ -1322,6 +1393,11 @@ async def test_sync_definite_failure_after_mutation_rolls_back_before_recording(
                 )
                 == "PREPARED"
             )
+        event = next(record for record in caplog.records if record.msg == "offline_sync_command")
+        payload = json.loads(JsonFormatter().format(event))
+        assert payload["outcome"] == "rejected"
+        assert payload["reason_category"] == "invalid_command"
+        assert "Injected definite rejection after mutation" not in json.dumps(payload)
         monkeypatch.undo()
         assert (await sync_commands(client, context, [command]))[0][
             "original_outcome"
@@ -1333,7 +1409,9 @@ async def test_sync_definite_failure_after_mutation_rolls_back_before_recording(
     "age_delta,expected",
     [(timedelta(hours=24), "APPLIED"), (timedelta(hours=24, microseconds=1), "REVIEW_REQUIRED")],
 )
-async def test_sync_snapshot_age_uses_exact_server_boundary(monkeypatch, age_delta, expected):
+async def test_sync_snapshot_age_uses_exact_server_boundary(
+    monkeypatch, age_delta, expected, caplog: pytest.LogCaptureFixture
+):
     from app.modules.shipments import offline
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -1344,8 +1422,17 @@ async def test_sync_snapshot_age_uses_exact_server_boundary(monkeypatch, age_del
             return issued + age_delta
 
         monkeypatch.setattr(offline, "server_now", boundary_clock)
-        result = (await sync_commands(client, context, [pickup_command(snapshot)]))[0]
+        with caplog.at_level(logging.INFO, logger="app.telemetry"):
+            result = (await sync_commands(client, context, [pickup_command(snapshot)]))[0]
         assert result["outcome"] == expected
+    event = next(record for record in caplog.records if record.msg == "offline_sync_command")
+    payload = json.loads(JsonFormatter().format(event))
+    if expected == "REVIEW_REQUIRED":
+        assert payload["outcome"] == "review_required"
+        assert payload["reason_category"] == "expired_snapshot"
+    else:
+        assert payload["outcome"] == "applied"
+        assert payload["reason_category"] == "none"
 
 
 @pytest.mark.asyncio

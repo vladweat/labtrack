@@ -77,7 +77,7 @@ services:
 
 volumes:
   postgres_data:
-    name: labtrack_dev_postgres_data
+    name: ${POSTGRES_VOLUME_NAME:-labtrack_dev_postgres_data}
 
 networks:
   backend:

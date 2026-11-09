@@ -102,7 +102,7 @@ def openapi_schema_shape(
     return result
 
 
-def test_stage_e_static_and_runtime_openapi_contracts_align() -> None:
+def test_stage_e_runtime_openapi_conforms_to_historical_design_excerpts() -> None:
     contract_path = Path(__file__).resolve().parents[3] / "openapi" / "labtrack-v1.json"
     contract = json.loads(contract_path.read_text(encoding="utf-8"))
     runtime = app.openapi()
