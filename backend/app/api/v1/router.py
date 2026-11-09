@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 
+from app.core.errors import API_ERROR_RESPONSES
 from app.modules.analytics.router import router as analytics_router
 from app.modules.identity.router import router as identity_router
 from app.modules.notifications.router import router as notifications_router
@@ -14,7 +15,7 @@ from app.modules.shipments.offline import router as courier_offline_router
 from app.modules.shipments.receiving import router as receiving_router
 from app.modules.shipments.router import router as shipments_router
 
-api_router = APIRouter()
+api_router = APIRouter(responses={422: API_ERROR_RESPONSES[422]})
 api_router.include_router(identity_router)
 api_router.include_router(organizations_router)
 api_router.include_router(samples_router)

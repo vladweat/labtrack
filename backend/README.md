@@ -40,46 +40,20 @@ uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --no-proxy-headers
 ```
 
 The login limiter uses the ASGI transport peer as the source address by
-default. To use a reverse proxy's `X-Real-IP`, set
-`LOGIN_TRUSTED_PROXY_NETWORKS` to a comma-separated list of that proxy's exact
-IP addresses or CIDRs, and configure the proxy to overwrite or remove
-client-supplied forwarding headers. The limiter never reads
-`X-Forwarded-For`. The demo Docker images and local run commands explicitly
-use `--no-proxy-headers`; do not re-enable Uvicorn's proxy middleware because
-it can rewrite the ASGI client address before the application checks the
-immediate peer.
+default. To honor `X-Real-IP`, configure
+`LOGIN_TRUSTED_PROXY_NETWORKS` with only the immediate proxy peer's pinned
+address, and make the edge overwrite the header after validating the client
+address. The limiter never reads `X-Forwarded-For`. Keep Uvicorn's
+`--no-proxy-headers`; proxy middleware can rewrite `request.client.host` before
+the limiter checks the peer.
 
-The checked demo configuration has Caddy and no Nginx config. Caddy currently
-sets `X-Real-IP` from `{remote_host}`, which is the connecting peer; this is
-the client only when Caddy receives the connection directly. If another load
-balancer is in front, configure Caddy to trust only that balancer and set
-`X-Real-IP` from Caddy's validated client address. Remove incoming
-`X-Forwarded-For` in the proxy configuration as well. For Caddy, the relevant
-upstream directives are:
-
-```caddyfile
-header_up X-Real-IP {client_ip}
-header_up -X-Forwarded-For
-```
-
-With no upstream load balancer, Caddy resolves `client_ip` to its direct
-socket peer. If a load balancer is present, add only its CIDRs to Caddy's
-`servers > trusted_proxies` configuration before relying on `client_ip`.
-The demo Compose file does not publish the API port, but the API joins both
-`edge` and `data`; Caddy and the seed job join `edge`, while the database,
-Redis, migration, worker, and Beat services join `data`. A trusted network
-covering either subnet would therefore trust more peers than Caddy. Pin the
-Caddy address and pass its exact `/32` or `/128` through
-`LOGIN_TRUSTED_PROXY_NETWORKS`; leave the setting empty if the immediate peer
-cannot be pinned and restricted.
-
-The checked demo Compose file does not currently pass this setting to the API.
-To enable proxy identity there, add
-`LOGIN_TRUSTED_PROXY_NETWORKS: ${DEMO_LOGIN_TRUSTED_PROXY_NETWORKS:-}` to the
-API environment, define that private deployment variable as the pinned Caddy
-peer `/32` or `/128`, and apply the Caddy directives above. Without those
-changes the API stays on transport-peer identity, so requests through Caddy
-share its bucket.
+The API Dockerfiles in this repository use `--no-proxy-headers`. The public
+deployment Compose file and active edge configuration are not available in
+this checkout, so deployment command-line flags, proxy header behavior, and
+API network exposure have not been verified. Keep
+`LOGIN_TRUSTED_PROXY_NETWORKS` empty until the deployment is checked against
+the requirements in [the deployment guide](../docs/deploy.md). With the
+default, clients behind a shared proxy will share a rate-limit bucket.
 
 Failed-login limits are process-local and default to 30 failures per source in
 900 seconds. Restarts clear the counters, and each worker or replica has its

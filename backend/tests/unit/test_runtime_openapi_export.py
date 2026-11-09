@@ -58,6 +58,11 @@ def test_exported_runtime_openapi_has_expected_routes_and_is_reproducible(
         "#/components/schemas/LoginRequest"
     )
     assert _schema_ref(auth, "200") == "#/components/schemas/AccessTokenResponse"
+    assert _schema_ref(auth, "401") == "#/components/schemas/APIErrorResponse"
+    assert _schema_ref(auth, "429") == "#/components/schemas/APIErrorResponse"
+    assert _schema_ref(auth, "422") == "#/components/schemas/APIErrorResponse"
+    assert auth["responses"]["401"]["headers"]["WWW-Authenticate"]["schema"]["type"] == "string"
+    assert auth["responses"]["429"]["headers"]["Retry-After"]["schema"]["type"] == ("string")
 
     sync = paths["/api/v1/courier/sync"]["post"]
     assert sync["operationId"] == "syncCourierOfflineCommands"
@@ -66,6 +71,7 @@ def test_exported_runtime_openapi_has_expected_routes_and_is_reproducible(
     )
     assert _schema_ref(sync, "200") == "#/components/schemas/CourierSyncResponse"
     assert _schema_ref(sync, "409") == "#/components/schemas/APIErrorResponse"
+    assert _schema_ref(sync, "422") == "#/components/schemas/APIErrorResponse"
 
     workflow_operations = {
         "/api/v1/shipments/{shipment_id}/handoffs/pickup/confirm-release": (

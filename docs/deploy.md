@@ -5,16 +5,13 @@
 LabTrack models sample custody and laboratory shipments. Its existing synthetic
 demo is Sender → Courier → Lab: it provisions four scoped demo accounts, creates
 a sample and shipment, seals a container, and leaves the shipment
-`READY_FOR_PICKUP`. This repository has no property, tenant, rental contract,
-rent charge, partial-payment, ledger, or payment-provider modules, so it cannot
-produce that financial workflow without a separate domain implementation.
+`READY_FOR_PICKUP`.
 
 The seed passwords are read from `DEMO_*_PASSWORD` environment variables; they
 are not embedded in the seed code. Use unique generated values in a private
 environment file. Demo email addresses end in `.example.test`. The seed only
 calls the local LabTrack API. The tracked Compose overlay restricts the one-shot
-seed service to the internal data network. There is no payment provider or
-provider credential configured in this project.
+seed service to the internal data network.
 
 ## Seed guard
 
@@ -151,3 +148,35 @@ database passwords, and `JWT_SECRET_KEY` in the private deployment environment
 file. Do not copy them into this repository, issue output, screenshots, or
 shared logs. The seed is idempotent and is not a reset of the shared public
 demo.
+
+### Login source address behind the public edge
+
+The public repository does not contain `deploy/demo/compose.yaml` or an active
+Caddy/Nginx configuration. The older private checkout also has no tracked edge
+configuration. The API Dockerfiles in this repository start Uvicorn with
+`--no-proxy-headers`, but a private Compose `command` can override that default.
+The deployed Uvicorn command, edge header rules, API reachability, and actual
+proxy peer therefore remain unverified from this repository.
+
+Keep `LOGIN_TRUSTED_PROXY_NETWORKS` empty until the deployment owner verifies
+all of the following against the running configuration:
+
+1. Uvicorn still starts with `--no-proxy-headers`; proxy middleware must not
+   rewrite `request.client.host` before the login limiter reads the immediate
+   transport peer.
+2. Untrusted clients cannot connect directly to the API and bypass the edge.
+3. The edge removes or overwrites any incoming `X-Real-IP`, then sets it to the
+   validated client address. If another load balancer precedes Caddy/Nginx,
+   that proxy must be explicitly trusted there and the client address must be
+   derived from the validated proxy chain. Remove incoming `X-Forwarded-For`;
+   the application does not use it for rate limiting.
+4. `LOGIN_TRUSTED_PROXY_NETWORKS` contains only the immediate proxy peer's
+   pinned `/32` or `/128`, never a shared Docker subnet or broad proxy range.
+
+For a direct Caddy edge, the reverse-proxy handler can set `X-Real-IP` from
+`{client_ip}` and remove `X-Forwarded-For`; these are required settings to
+verify or add in the private Caddyfile, not claims about the current deployment.
+If the proxy peer cannot be pinned and isolated, leave the setting empty: the
+limiter will use the transport peer, so clients behind a shared proxy will
+share a bucket. The application does not trust client-supplied identity by
+default.

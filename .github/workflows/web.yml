@@ -9,12 +9,6 @@ on:
       - "backend/app/modules/shipments/offline.py"
       - ".github/workflows/web.yml"
   pull_request:
-    paths:
-      - "web/**"
-      - "openapi/labtrack-v1.json"
-      - "backend/app/modules/identity/**"
-      - "backend/app/modules/shipments/offline.py"
-      - ".github/workflows/web.yml"
 
 jobs:
   web:

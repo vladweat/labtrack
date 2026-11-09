@@ -1,7 +1,9 @@
 name: Real browser/API acceptance
 
 on:
-  pull_request:
+  push:
+    branches:
+      - main
     paths:
       - "backend/**"
       - "web/**"
@@ -9,6 +11,7 @@ on:
       - ".github/workflows/real-acceptance.yml"
       - "docs/development.md"
       - ".env.example"
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -81,5 +84,10 @@ jobs:
           else
             status=$?
             printf '::error title=Real acceptance failed::The real acceptance scenario exited with status %s. Raw diagnostics were withheld and not uploaded; rerun locally to inspect the runner diagnostics.\n' "$status"
+            {
+              printf '### Real browser/API acceptance failed\n\n'
+              printf 'The scenario exited with status `%s`. Raw output was withheld and no runner logs or artifacts were uploaded.\n\n' "$status"
+              printf 'Reproduce locally with `cd web && npm run test:acceptance:local` after installing the documented dependencies.\n'
+            } >> "$GITHUB_STEP_SUMMARY"
             exit "$status"
           fi

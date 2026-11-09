@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings, get_settings
+from app.core.errors import API_ERROR_RESPONSES
 from app.core.login_rate_limit import LoginAttemptLimiter, get_client_source_ip
 from app.core.security import create_access_token, verify_password
 from app.db.session import get_db_session
@@ -22,8 +23,29 @@ from app.modules.identity.schemas import (
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
+LOGIN_ERROR_RESPONSES = {
+    401: {
+        **API_ERROR_RESPONSES[401],
+        "headers": {
+            "WWW-Authenticate": {
+                "description": "Bearer authentication challenge",
+                "schema": {"type": "string"},
+            }
+        },
+    },
+    429: {
+        **API_ERROR_RESPONSES[429],
+        "headers": {
+            "Retry-After": {
+                "description": "Seconds until another login attempt is allowed",
+                "schema": {"type": "string"},
+            }
+        },
+    },
+}
 
-@router.post("/token", response_model=AccessTokenResponse)
+
+@router.post("/token", response_model=AccessTokenResponse, responses=LOGIN_ERROR_RESPONSES)
 async def login(
     request: LoginRequest,
     http_request: Request,

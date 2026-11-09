@@ -22,5 +22,5 @@ class APIErrorResponse(BaseModel):
 
 API_ERROR_RESPONSES = {
     status: {"model": APIErrorResponse, "description": "Documented API error"}
-    for status in (401, 403, 404, 409, 422, 500, 503)
+    for status in (401, 403, 404, 409, 422, 429, 500, 503)
 }
