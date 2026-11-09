@@ -8,7 +8,7 @@ import os
 import sys
 from datetime import UTC, datetime, timedelta
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 from uuid import UUID
 
 from sqlalchemy import select
@@ -25,11 +25,30 @@ from app.modules.identity.models import Membership, Organization, Region, User
 from app.modules.identity.provisioning import ProvisioningError, provision_user
 
 
+class _RejectRedirects(HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, message, headers, new_url):
+        return None
+
+
+def urlopen(request: Request, timeout: int):
+    """Open a local demo API request without proxies or redirect following."""
+
+    opener = build_opener(ProxyHandler({}), _RejectRedirects)
+    return opener.open(request, timeout=timeout)
+
+
 def required_env(name: str) -> str:
     value = os.environ.get(name, "").strip()
     if not value:
         raise RuntimeError(f"{name} must be set")
     return value
+
+
+class DemoApiRequestError(RuntimeError):
+    def __init__(self, method: str, path: str, status_code: int, detail: str) -> None:
+        self.status_code = status_code
+        self.detail = detail
+        super().__init__(f"{method} {path} failed with HTTP {status_code}: {detail}")
 
 
 async def ensure_demo_user(
@@ -202,7 +221,7 @@ def api_request(
             return json.loads(response.read())
     except HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"{method} {path} failed with HTTP {error.code}: {detail}") from error
+        raise DemoApiRequestError(method, path, error.code, detail) from error
     except URLError as error:
         raise RuntimeError(
             f"Could not reach the LabTrack API for {method} {path}: {error}"
@@ -250,13 +269,26 @@ def create_demo_shipment(sender_org_id: UUID, courier_id: UUID, lab_id: UUID) ->
         expected_delivery_at = (datetime.now(UTC) + timedelta(days=1)).replace(
             hour=12, minute=0, second=0, microsecond=0
         )
-        api_request(
-            "PATCH",
-            f"/api/v1/shipments/{shipment_id}",
-            token=sender_token,
-            idempotency_key="labtrack-public-demo-v1-delivery-date",
-            body={"expected_delivery_at": expected_delivery_at.isoformat()},
-        )
+        try:
+            api_request(
+                "PATCH",
+                f"/api/v1/shipments/{shipment_id}",
+                token=sender_token,
+                idempotency_key="labtrack-public-demo-v1-delivery-date",
+                body={"expected_delivery_at": expected_delivery_at.isoformat()},
+            )
+        except DemoApiRequestError as error:
+            idempotency_conflict = (
+                error.status_code == 409
+                and "Idempotency-Key was already used with another request" in error.detail
+            )
+            if not idempotency_conflict:
+                raise
+            current_shipment = api_request(
+                "GET", f"/api/v1/shipments/{shipment_id}", token=sender_token
+            )
+            if current_shipment["expected_delivery_at"] is None:
+                raise
     api_request(
         "PATCH",
         f"/api/v1/shipments/{shipment_id}/courier",

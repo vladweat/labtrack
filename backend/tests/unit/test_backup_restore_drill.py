@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -173,3 +174,24 @@ def test_runtime_role_password_is_sent_over_stdin_not_command_arguments(
     assert isinstance(command, list)
     assert secret not in " ".join(command)
     assert captured["input"] == f"{secret}\n".encode()
+
+
+def test_container_cleanup_fails_closed_when_docker_daemon_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    verifier = DisposableVerifier({})
+    verifier.started = True
+    commands: list[list[str]] = []
+
+    def unavailable_docker(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 1, stdout=b"", stderr=b"daemon unavailable")
+
+    monkeypatch.setattr("app.ops.backup_restore_drill.subprocess.run", unavailable_docker)
+
+    with pytest.raises(BackupRestoreDrillError, match="Could not verify"):
+        verifier.close()
+
+    assert len(commands) == 2
+    assert commands[1][1:3] == ["ps", "--all"]
+    assert verifier.started

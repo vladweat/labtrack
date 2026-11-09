@@ -393,10 +393,13 @@ class DisposableVerifier:
 
     def __init__(self, environment: dict[str, str]) -> None:
         self.environment = environment
-        self.name = f"labtrack-restore-drill-{uuid.uuid4().hex[:12]}"
+        self.name = f"labtrack-restore-drill-{uuid.uuid4().hex}"
         self.started = False
 
     def start(self) -> None:
+        # docker run may create the container before its CLI times out or loses
+        # the daemon response, so cleanup must be armed before starting it.
+        self.started = True
         _run(
             [
                 "docker",
@@ -425,7 +428,6 @@ class DisposableVerifier:
             label="Disposable PostgreSQL startup",
             timeout=120,
         )
-        self.started = True
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             result = subprocess.run(
@@ -461,13 +463,24 @@ class DisposableVerifier:
         )
         if result.returncode:
             remains = subprocess.run(
-                ["docker", "inspect", self.name],
-                stdout=subprocess.DEVNULL,
+                [
+                    "docker",
+                    "ps",
+                    "--all",
+                    "--quiet",
+                    "--filter",
+                    f"name=^{self.name}$",
+                ],
+                stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 check=False,
                 timeout=10,
             )
-            if remains.returncode == 0:
+            if remains.returncode:
+                raise BackupRestoreDrillError(
+                    "Could not verify that the disposable restore container was removed."
+                )
+            if remains.stdout.strip():
                 raise BackupRestoreDrillError("Could not remove the disposable restore container.")
         self.started = False
 
