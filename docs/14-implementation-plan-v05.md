@@ -1,84 +1,84 @@
-# LabTrack v0.5 — Implementation Roadmap and Verification
+# LabTrack v0.5 — План реализации и проверки
 
-> **Исторический документ (до v0.6).** Приоритет имеют [Decisions v0.6](15-decisions-v06.md), [Domain v0.6](16-domain-workflows-v06.md), [Data Model v0.6](17-data-model-v06.md), [API v0.6](18-api-v06.md). Этот текст может содержать устаревшие all-or-nothing handoff и unilateral resolution; не использовать его как актуальный контракт.
+> **Исторический документ (до v0.6).** Приоритет имеют [Решения v0.6](15-decisions-v06.md), [Доменная модель v0.6](16-domain-workflows-v06.md), [Модель данных v0.6](17-data-model-v06.md), [API v0.6](18-api-v06.md). Этот текст может содержать устаревшие правила передачи всей партии по принципу «всё или ничего» и одностороннего разрешения проблем; не использовать его как актуальный контракт.
 
-**Goal:** production-like MVP with synthetic data, reproducible deployment, real PostgreSQL integration tests, CI, observability and a Courier offline queue. No real healthcare deployment is claimed.
+**Цель:** MVP, приближенный к эксплуатации, с синтетическими данными, воспроизводимым развёртыванием, настоящими интеграционными тестами PostgreSQL, CI, наблюдаемостью и очередью действий курьера без сети. Реальное внедрение в здравоохранении не заявляется.
 
-**Approved product decisions:** [10-domain-hardening-v05.md](10-domain-hardening-v05.md).  
-**Design specs:** [Data Model](12-data-model-v05.md), [API](13-api-v05.md), [Offline Sync](11-offline-sync-protocol.md).
+**Утверждённые продуктовые решения:** [10-domain-hardening-v05.md](10-domain-hardening-v05.md).
+**Проектные спецификации:** [Модель данных](12-data-model-v05.md), [API](13-api-v05.md), [Синхронизация действий без сети](11-offline-sync-protocol.md).
 
-## 1. Scope boundaries
+## 1. Границы продукта
 
-**Included:** one pilot region, one central laboratory, multiple senders, individual tubes in containers, bilateral handoffs, MISSING/REJECTED at sample/container levels, manual blocked-delivery resolution, correctable receiving and lab-manager reopening, opaque external references, short-lived local JWT auth, offline Courier sync, audit, dashboards, best-effort notifications.
+**Включено:** один пилотный регион, одна центральная лаборатория, несколько отправителей, отдельные пробирки в контейнерах, двусторонние передачи, MISSING/REJECTED на уровнях пробирок и контейнеров, ручное разрешение блокировки доставки, исправляемая приёмка и повторное открытие руководителем лаборатории, непрозрачные внешние ссылки, локальная аутентификация короткоживущим JWT, синхронизация действий курьера без сети, аудит, панели показателей, уведомления без гарантии доставки.
 
-**Excluded:** actual patient data, real LIS/MIS integration, clinical evaluation, GPS/IoT, legally qualified digital signatures, multiple regional production deployments, automatic partial delivery and redistribution, multi-hop routing, offline Sender/Lab workflows and reusing samples from a cancelled Shipment.
+**Исключено:** реальные данные пациентов, настоящая интеграция с ЛИС/МИС, клиническая оценка, GPS/IoT, юридически квалифицированные электронные подписи, несколько региональных промышленных внедрений, автоматическая частичная доставка и перераспределение, многоэтапная маршрутизация, работа отправителя/лаборатории без сети и повторное использование пробирок отменённого Shipment.
 
-Two operational assumptions still need product approval **before a real pilot**: physical custody of refused containers and legal meaning of offline timestamps. They must never be silently inferred from a successful sync.
+Два операционных предположения всё ещё требуют продуктового согласования **до реального пилота**: физическая ответственность за отклонённые контейнеры и правовое значение времени действий без сети. Их нельзя незаметно выводить из успешной синхронизации.
 
-## 2. Engineering increments
+## 2. Этапы реализации
 
-| Increment | Deliverables | Acceptance |
+| Этап | Результаты | Критерии приёмки |
 |---|---|---|
-| A. Foundation | FastAPI, typed config, PostgreSQL, SQLAlchemy, Alembic, Docker Compose, health endpoints, structured logs, pytest, CI | Reproducible empty environment; migrations apply; health/readiness and CI pass |
-| B. Access & Reference Data | Bootstrap CLI, users, Argon2id auth, short-lived JWT, org/region memberships, reason-code fixtures | Negative IDOR and role tests; regional ops/lab manager scoped |
-| C. Tubes & Manifest | Samples, opaque external refs, Shipment, containers/items, Courier assignment, seal, PostgreSQL manifest triggers | Unique sample assignment; 1..N populated containers; direct SQL sealed mutation rejected |
-| D. Handoffs | Pickup and Delivery, two actors, idempotency, Handoff attempts, audit | One confirmation never finalizes; no self-confirmation; concurrent commands safe |
-| E. Container exceptions | Report MISSING/REJECTED container, block delivery, regional manual RETRY/CLOSE | No partial handoff; old handoff withdrawn on block; child samples unchanged |
-| F. Receiving & Reopen | Sample results, reason codes, revisions, sessions, manager reopen, summary metrics | All item results explicit; revisions preserve audit, outcomes recomputed on completion |
-| G. Offline Courier | Courier PWA offline cache, durable queue, sync API, client-command IDs, conflict UI | Offline command never changes server before sync; secure replay after lost response |
-| H. Production-like finish | Celery/Redis best-effort notifications, stalled dashboards, metrics, CI quality gates, backups/runbooks/load tests | End-to-end acceptance on synthetic data; recovery/observability demonstrated |
+| A. Основа | FastAPI, типизированная конфигурация, PostgreSQL, SQLAlchemy, Alembic, Docker Compose, маршруты проверки работоспособности, структурированные журналы, pytest, CI | Пустое окружение воспроизводимо; миграции применяются; проверки работоспособности/готовности и CI проходят |
+| B. Доступ и справочники | CLI начальной настройки, пользователи, аутентификация Argon2id, короткоживущий JWT, членство в организациях/регионах, тестовые коды причин | Негативные тесты IDOR и ролей; региональный оператор и руководитель лаборатории ограничены своими областями |
+| C. Пробирки и манифест | Образцы, непрозрачные внешние ссылки, Shipment, контейнеры/позиции, назначение курьера, запечатывание, триггеры манифеста PostgreSQL | Уникальная привязка пробирок; 1..N заполненных контейнеров; прямое SQL-изменение после запечатывания отклоняется |
+| D. Передачи | Забор и доставка, два исполнителя, идемпотентность, попытки Handoff, аудит | Одно подтверждение не завершает передачу; нет самоподтверждения; конкурентные команды безопасны |
+| E. Проблемы контейнеров | Сообщение о MISSING/REJECTED контейнера, блокировка доставки, ручное RETRY/CLOSE региональным оператором | Без частичной передачи; старая передача отзывается при блокировке; дочерние пробирки не меняются |
+| F. Приёмка и повторное открытие | Результаты пробирок, коды причин, версии изменений, сеансы, повторное открытие руководителем, сводные метрики | Все результаты позиций явные; версии сохраняют аудит; итог заново вычисляется при завершении |
+| G. Курьер без сети | Кэш PWA курьера без сети, устойчивая очередь, API синхронизации, ID клиентских команд, интерфейс конфликтов | Команда без сети не меняет сервер до синхронизации; защищённый повтор после потери ответа |
+| H. Подготовка к условиям эксплуатации | Уведомления Celery/Redis без гарантии доставки, панели зависших партий, метрики, обязательные проверки качества CI, резервные копии/инструкции эксплуатации/нагрузочные тесты | Сквозная приёмка на синтетических данных; восстановление и наблюдаемость продемонстрированы |
 
-Do not build the offline client before server handoff/state invariants and sync endpoint integration tests are stable. Backend modules should expose shared application commands for online REST and offline sync to avoid divergent logic.
+Не создавать клиент без сети до стабилизации серверных инвариантов передачи/состояний и интеграционных тестов маршрута синхронизации. Серверные модули должны предоставлять общие прикладные команды для обычного REST и синхронизации без сети, чтобы логика не расходилась.
 
-## 3. Architecture changes in place
+## 3. Изменения существующей архитектуры
 
-- Keep modular monolith; extend `shipments` module with delivery block/manual resolution and receiving sessions. Do not create separate distributed services.
-- Introduce region-scoped `REGIONAL_OPERATIONS` and lab-scoped `LAB_MANAGER`, not blanket superusers.
-- `container_issues` is authoritative only for container-level problems; `container_items` is authoritative for tube outcomes.
-- Freeze sealed manifest with PostgreSQL triggers and domain checks; receipt revisions remain writable while receiving is reopened.
-- Treat every offline command as a queued client **proposal**, later accepted or rejected by the server after full authorization, state and idempotency checks.
-- Keep Celery notifications best effort; Dashboard must still surface stalled handoffs if Redis or worker delivery fails.
+- Сохранить модульный монолит; расширить `shipments` блокировкой доставки, ручным разрешением и сеансами приёмки. Не создавать отдельные распределённые сервисы.
+- Ввести `REGIONAL_OPERATIONS` с областью региона и `LAB_MANAGER` с областью лаборатории, без неограниченных суперпользователей.
+- `container_issues` — достоверный источник только проблем контейнеров; `container_items` — результатов пробирок.
+- Зафиксировать запечатанный манифест триггерами PostgreSQL и доменными проверками; версии результатов приёмки доступны для записи при повторно открытой приёмке.
+- Считать каждую команду без сети поставленным в очередь клиентским **предложением**, которое сервер позже принимает или отклоняет после полной проверки полномочий, состояния и идемпотентности.
+- Оставить уведомления Celery без гарантии доставки; панель показателей обязана показывать зависшие передачи даже при сбое Redis или обработчика.
 
-## 4. Test matrix and non-negotiable CI coverage
+## 4. Матрица тестов и обязательное покрытие CI
 
-| Category | Required scenario |
+| Категория | Обязательный сценарий |
 |---|---|
-| Unit | State transitions, reason-code matching, scope, manifest comparisons, offline result mapping |
-| SQL integrity | One tube in one container; region constraints; issue uniqueness; one OPEN receiving session; sealed manifest triggers |
-| Concurrency | Seal vs item update; two competing Courier confirmations; double issue reporting; double resolution; concurrent reopen |
-| Chain of custody | Sender only → PICKUP_PENDING; Courier only delivery → DELIVERY_PENDING; no automatic tube acceptance |
-| Container exceptions | Missing/refused container blocks delivery; no partial receipt; manual retry creates new handoff attempt |
-| Receiving | MISSING/REJECTED require matching codes; corrections before close; manager-only reopen preserves history |
-| Offline | Retry after lost response; stale status or manifest; revoked Courier, expired token, concurrent online/offline action |
-| Security | Cross-org IDOR, cross-region ops, read-only analyst, inaccessible external reference, no patient data in payload or logs |
-| Failure recovery | Audit insertion failure rolls back business change; Redis down cannot erase committed business state |
-| E2E | 10 tubes / 2 containers, 4 confirmations, 8 accepted/1 missing/1 rejected; plus blocked container and reopened receiving scenario |
+| Модульные | Переходы состояний, соответствие кода причины, область доступа, сравнение манифестов, отображение результатов действий без сети |
+| Целостность SQL | Одна пробирка в одном контейнере; ограничения регионов; уникальность проблем; один сеанс приёмки OPEN; триггеры запечатанного манифеста |
+| Конкурентный доступ | Запечатывание одновременно с обновлением позиции; два конкурирующих подтверждения курьера; двойное сообщение о проблеме; двойное разрешение; конкурентное повторное открытие |
+| Цепочка ответственности | Только отправитель → PICKUP_PENDING; только доставка курьера → DELIVERY_PENDING; без автоматической приёмки пробирок |
+| Проблемы контейнеров | Отсутствующий/отклонённый контейнер блокирует доставку; без частичной приёмки; ручная повторная попытка создаёт новую передачу |
+| Приёмка | MISSING/REJECTED требуют подходящих кодов; исправления до закрытия; повторное открытие только руководителем сохраняет историю |
+| Без сети | Повтор после потери ответа; устаревший статус или манифест; отозванный курьер, истёкший токен, конкурентные действия через сеть и без неё |
+| Безопасность | IDOR между организациями, операции чужого региона, аналитик только для чтения, недоступная внешняя ссылка, отсутствие данных пациентов в запросах и журналах |
+| Восстановление после сбоев | Ошибка вставки аудита откатывает бизнес-изменение; отказ Redis не уничтожает зафиксированное бизнес-состояние |
+| E2E | 10 пробирок / 2 контейнера, 4 подтверждения, 8 принятых/1 отсутствующая/1 отклонённая; дополнительно заблокированный контейнер и повторно открытая приёмка |
 
-Use a real PostgreSQL instance (e.g. Docker test service) for all concurrency and trigger tests; SQLite does not provide equivalent semantics.
+Для всех конкурентных тестов и тестов триггеров использовать настоящий PostgreSQL (например, тестовый сервис Docker); SQLite не обеспечивает равнозначную семантику.
 
-## 5. Suggested quality gates
+## 5. Предлагаемые обязательные проверки качества
 
-- Format/lint/type-check: Ruff and a static type checker; project chooses exact versions at implementation.
-- Unit + integration + API schema contract tests, with CI fail on migration drift and schema invalidity.
-- Generate actual FastAPI OpenAPI at runtime and diff against the agreed design contract. Maintain one authoritative source after implementation.
-- Seed only synthetic identities and sample codes.
-- Basic load tests on representative data, with measured p50/p95 (do not assert undocumented speedups).
-- Structured request/audit logs, health/live and health/ready, basic dashboard and incident metrics.
-- Backup + restore smoke test before declaring production-like readiness; success metrics documented but no unverified SLA.
-- Non-root containers, secret handling, no sensitive data in exceptions, minimal JWT lifetime and auth throttling.
+- Форматирование, статический анализ и проверка типов: Ruff и статический анализатор типов; точные версии выбираются при реализации.
+- Модульные, интеграционные тесты и контрактные тесты схемы API; CI завершается ошибкой при расхождении миграций и некорректной схеме.
+- Получать реальную OpenAPI FastAPI во время исполнения и сравнивать с согласованным проектным контрактом. После реализации поддерживать единый достоверный источник.
+- Начальное заполнение — только синтетическими пользователями и кодами образцов.
+- Базовые нагрузочные тесты на представительных данных с измеренными p50/p95 (не заявлять недокументированное ускорение).
+- Структурированные журналы запросов/аудита, health/live и health/ready, базовая панель показателей и метрики инцидентов.
+- Базовая проверка резервного копирования и восстановления до заявления готовности к условиям эксплуатации; показатели успеха документированы, без непроверенного SLA.
+- Контейнеры без root, работа с секретами, отсутствие чувствительных данных в исключениях, минимальный срок JWT и ограничение частоты аутентификации.
 
-## 6. Definition of Done for v0.5 documentation
+## 6. Критерии завершения документации v0.5
 
-- [x] 20 questionnaire choices recorded without erasing prior agreed decisions.
-- [x] Separate container-level issue and per-tube receipt concepts documented.
-- [x] Delivery blocked, administrative close and retry flows specified.
-- [x] Reopening and immutable receipt history specified.
-- [x] Courier offline protocol and per-command idempotency defined.
-- [x] PostgreSQL schema delta / trigger invariants documented.
-- [x] API deltas documented; OpenAPI draft aligned with new routes.
-- [ ] Operational custody assumptions approved by relevant stakeholder.
-- [ ] Real schema migration implemented and tested (implementation stage).
-- [ ] OpenAPI draft validated against generated FastAPI schema (implementation stage).
-- [ ] Backend, PWA, CI and automated tests implemented (implementation stage).
+- [x] 20 решений опросника записаны без удаления ранее согласованных решений.
+- [x] Раздельно описаны проблемы контейнеров и результаты приёмки пробирок.
+- [x] Описаны блокировка доставки, административное закрытие и повторная попытка.
+- [x] Описаны повторное открытие и неизменяемая история приёмки.
+- [x] Определены протокол курьера без сети и идемпотентность каждой команды.
+- [x] Описаны изменения схемы PostgreSQL и инварианты триггеров.
+- [x] Описаны изменения API; черновик OpenAPI согласован с новыми маршрутами.
+- [ ] Предположения об операционной ответственности утверждены соответствующим участником.
+- [ ] Реальная миграция схемы реализована и проверена (этап реализации).
+- [ ] Черновик OpenAPI проверен по сгенерированной схеме FastAPI (этап реализации).
+- [ ] Серверная часть, PWA, CI и автоматические тесты реализованы (этап реализации).
 
-**Documentation-complete is not implementation-complete.** v0.5 stabilizes the intended model and identifies remaining approvals; no migrations, HTTP endpoints, browser client or production infrastructure are implied by this plan.
+**Завершение документации не означает завершения реализации.** v0.5 стабилизирует целевую модель и обозначает оставшиеся согласования; этот план не подразумевает наличия миграций, HTTP-маршрутов, браузерного клиента или промышленной инфраструктуры.

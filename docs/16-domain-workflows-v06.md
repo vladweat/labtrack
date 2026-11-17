@@ -1,35 +1,35 @@
-# LabTrack v0.6 — Shipment, Container, Custody and Receiving State Machines
+# LabTrack v0.6 — Автоматы состояний отправки, контейнера, ответственности и приёмки
 
-> **Исторический базовый документ v0.6.** v0.6.1 supersedes contradictory requirements; current decisions and API are in [Decision Register v0.6.1](20-decisions-v061.md), [Custody Exceptions](21-custody-exceptions-v061.md), [Offline Integrity](22-offline-integrity-v061.md), [DB Delta](23-data-model-v061.md), [API](24-api-and-operations-v061.md). Keep v0.6 rules only where unchanged.
+> **Исторический базовый документ v0.6.** Противоречащие требования заменены версией v0.6.1; актуальные решения и API приведены в документах [Реестр решений v0.6.1](20-decisions-v061.md), [Исключения при передаче ответственности](21-custody-exceptions-v061.md), [Целостность автономных операций](22-offline-integrity-v061.md), [Изменения БД](23-data-model-v061.md), [API](24-api-and-operations-v061.md). Правила v0.6 сохраняются только там, где они не изменились.
 
-**Normative workflow specification.** See [Decision Register](15-decisions-v06.md) for what was user-approved and which technical policies are derived. All data synthetic; no legal signing or clinical acceptability decisions.
+**Нормативная спецификация процессов.** В [Реестре решений](15-decisions-v06.md) указано, что одобрил пользователь и какие технические правила являются производными. Все данные синтетические; юридического подписания и решений о клинической пригодности нет.
 
-## 1. Aggregate boundaries
+## 1. Границы агрегатов
 
-A Shipment groups one or more sealed TransportContainers, each containing one or more Sample items. **Shipment is the transaction/locking aggregate**, but **Delivery custody is per TransportContainer**; no per-container operation skips the parent lock.
+Отправка объединяет один или несколько зафиксированных транспортных контейнеров, каждый с одним или несколькими образцами. **Отправка — агрегат транзакций и блокировок**, но **ответственность при доставке учитывается по транспортным контейнерам**; ни одна операция с контейнером не пропускает блокировку родителя.
 
-- **Pickup:** one Shipment-level bilateral handoff. Sender confirms release → `PICKUP_PENDING`; assigned Courier checks the complete sealed set and confirms pickup → all Shipment containers become `IN_TRANSIT`. Distinct actors. Courier reassignment after DRAFT forbidden.
-- **Delivery:** one bilateral handoff **per container**. Courier initiates delivery of C-001 → C-001 `DELIVERY_PENDING`. Destination Lab Operator confirms receipt of C-001 → C-001 `RECEIVED`. C-002 may remain `IN_TRANSIT` or `BLOCKED`. Distinct actors for each container handoff; same actor may participate in multiple containers.
-- **Tube receiving:** Lab may mark a tube only if **its own parent container is `RECEIVED` with a confirmed two-party delivery handoff**. Scan/manual selection. Cannot receive items belonging to a container still in transit, pending, blocked or closed undelivered.
+- **Получение курьером:** одна двусторонняя передача на уровне отправки. Отправитель подтверждает выдачу → `PICKUP_PENDING`; назначенный курьер проверяет полный зафиксированный комплект и подтверждает получение → все контейнеры отправки переходят в `IN_TRANSIT`. Участники различаются. Переназначение курьера после DRAFT запрещено.
+- **Доставка:** одна двусторонняя передача **для каждого контейнера**. Курьер инициирует доставку C-001 → C-001 `DELIVERY_PENDING`. Оператор лаборатории назначения подтверждает получение C-001 → C-001 `RECEIVED`. C-002 может оставаться `IN_TRANSIT` или `BLOCKED`. Для каждой передачи контейнера участники различаются; один участник может работать с несколькими контейнерами.
+- **Приёмка пробирок:** лаборатория может отметить пробирку только если **её собственный родительский контейнер имеет статус `RECEIVED` с подтверждённой двусторонней передачей при доставке**. Выбор сканированием или вручную. Нельзя принимать элементы контейнера, который ещё в пути, ожидает подтверждения, заблокирован или закрыт без доставки.
 
-Manifest identities (Shipment → containers → items) remain unchanged after seal even when per-container delivery status or tube outcomes evolve.
+Идентичность записей манифеста (отправка → контейнеры → элементы) остаётся неизменной после фиксации, даже при изменении статуса доставки отдельных контейнеров или результатов пробирок.
 
 ## 2. TransportContainer.delivery_status
 
-| State | Meaning | Allowed transition |
+| Состояние | Значение | Допустимый переход |
 |---|---|---|
-| `PREPARED` | Packed before Courier's confirmed pickup | → IN_TRANSIT on completed Pickup |
-| `IN_TRANSIT` | Courier holds custody as recorded by system | → DELIVERY_PENDING (Courier initiation), → BLOCKED (MISSING report) |
-| `DELIVERY_PENDING` | Courier initiated this container's Delivery; Lab has not confirmed | → RECEIVED (Lab confirmation), → IN_TRANSIT (Courier withdraw), → BLOCKED (MISSING or REJECTED report) |
-| `RECEIVED` | Two different actors confirmed delivery for **this container**; lab has custody | No further delivery transitions in MVP; tubes can be received |
-| `BLOCKED` | Container missing/refused; no accepted delivery | → IN_TRANSIT after **approved** RETRY_DELIVERY; → UNDELIVERED_CLOSED after **approved** CLOSE_UNDELIVERED |
-| `UNDELIVERED_CLOSED` | Regional+Lab manually closed without successful delivery | Terminal, tube results remain NULL |
+| `PREPARED` | Упакован до подтверждённого получения курьером | → IN_TRANSIT после завершённого получения |
+| `IN_TRANSIT` | По данным системы ответственность несёт курьер | → DELIVERY_PENDING (инициирование курьером), → BLOCKED (сообщение MISSING) |
+| `DELIVERY_PENDING` | Курьер инициировал доставку этого контейнера; лаборатория ещё не подтвердила | → RECEIVED (подтверждение лаборатории), → IN_TRANSIT (отзыв курьером), → BLOCKED (сообщение MISSING или REJECTED) |
+| `RECEIVED` | Два разных участника подтвердили доставку **этого контейнера**; ответственность у лаборатории | Дальнейших переходов доставки в MVP нет; пробирки можно принимать |
+| `BLOCKED` | Контейнер отсутствует или не принят; успешной доставки нет | → IN_TRANSIT после **одобренного** RETRY_DELIVERY; → UNDELIVERED_CLOSED после **одобренного** CLOSE_UNDELIVERED |
+| `UNDELIVERED_CLOSED` | Региональные операторы и лаборатория вручную закрыли без успешной доставки | Окончательное состояние, результаты пробирок остаются NULL |
 
-REJECTED container is a Lab-side decision and should be raised while `DELIVERY_PENDING`; MISSING container may be raised from `IN_TRANSIT` or `DELIVERY_PENDING` by scoped Courier/Lab. Keep refusal separate from refusing a tube during a successfully received container's internal inspection.
+REJECTED для контейнера — решение лаборатории, которое следует заявлять в `DELIVERY_PENDING`; MISSING может заявить уполномоченный курьер или лаборатория из `IN_TRANSIT` или `DELIVERY_PENDING`. Отказ в приёмке контейнера следует отличать от отклонения пробирки при внутренней проверке успешно принятого контейнера.
 
-When a PENDING delivery handoff is interrupted by BLOCKED, it becomes WITHDRAWN (with actor, reason, event); subsequent RETRY creates a new attempt number for that container. A CONFIRMED handoff can never be withdrawn.
+Когда передача доставки PENDING прерывается состоянием BLOCKED, она становится WITHDRAWN (с участником, причиной и событием); последующий RETRY создаёт новый номер попытки для этого контейнера. Передачу CONFIRMED нельзя отозвать никогда.
 
-### Per-container handoff (simplified)
+### Передача отдельного контейнера (упрощённо)
 
 ```mermaid
 stateDiagram-v2
@@ -44,25 +44,25 @@ stateDiagram-v2
     BLOCKED --> UNDELIVERED_CLOSED: regional proposal + lab approval CLOSE
 ```
 
-## 3. Shipment.status (coarse aggregate progress)
+## 3. Shipment.status (укрупнённый ход агрегата)
 
-The Shipment status is **not** the sole source of individual container custody. Always use `TransportContainer.delivery_status` for access to tube receiving.
+Статус отправки **не является** единственным источником данных об ответственности за отдельные контейнеры. Для допуска к приёмке пробирок всегда использовать `TransportContainer.delivery_status`.
 
-Before Courier pickup, retain v0.5 `DRAFT → READY_FOR_PICKUP → PICKUP_PENDING → IN_TRANSIT` (or cancellation from DRAFT/READY_FOR_PICKUP and permitted pending release withdrawal).
+До получения курьером сохраняется цепочка v0.5 `DRAFT → READY_FOR_PICKUP → PICKUP_PENDING → IN_TRANSIT` (либо отмена из DRAFT/READY_FOR_PICKUP и допустимый отзыв ожидающей выдачи).
 
-After Courier pickup, derive **in this precedence order** on each container transition:
+После получения курьером вычислять **в следующем порядке приоритета** при каждом переходе контейнера:
 
-1. If there is an already-finalized receiving session and all container dispositions are terminal, preserve `COMPLETED` or `COMPLETED_WITH_ISSUES` until authorized reopening.
-2. If **all** containers are `UNDELIVERED_CLOSED`, transition to terminal `CLOSED_UNDELIVERED`; no receiving can be completed.
-3. If **all** containers are in `RECEIVED` or `UNDELIVERED_CLOSED`, and **at least one** is RECEIVED, Shipment is `RECEIVING` until Lab explicitly completes its current receiving session.
-4. If **some** containers are RECEIVED, but other containers remain outstanding (IN_TRANSIT, DELIVERY_PENDING or BLOCKED), status is `PARTIALLY_DELIVERED`, **even with an OPEN receiving session and some tube results**.
-5. If **none** is RECEIVED and **any** container is BLOCKED, status is `DELIVERY_BLOCKED`.
-6. If none RECEIVED or BLOCKED and any DELIVERY_PENDING, status is `DELIVERY_PENDING`.
-7. Otherwise, after Pickup, `IN_TRANSIT`.
+1. Если уже есть завершённый сеанс приёмки и все контейнеры имеют окончательный исход, сохранять `COMPLETED` или `COMPLETED_WITH_ISSUES` до уполномоченного повторного открытия.
+2. Если **все** контейнеры `UNDELIVERED_CLOSED`, перейти в окончательное `CLOSED_UNDELIVERED`; завершение приёмки невозможно.
+3. Если **все** контейнеры `RECEIVED` или `UNDELIVERED_CLOSED` и **хотя бы один** RECEIVED, отправка имеет статус `RECEIVING`, пока лаборатория явно не завершит текущий сеанс приёмки.
+4. Если **часть** контейнеров RECEIVED, а остальные ещё не завершены (IN_TRANSIT, DELIVERY_PENDING или BLOCKED), статус — `PARTIALLY_DELIVERED`, **даже при сеансе приёмки OPEN и наличии результатов пробирок**.
+5. Если **ни один** не RECEIVED и **хотя бы один** контейнер BLOCKED, статус — `DELIVERY_BLOCKED`.
+6. Если нет RECEIVED или BLOCKED и есть DELIVERY_PENDING, статус — `DELIVERY_PENDING`.
+7. Иначе после получения курьером — `IN_TRANSIT`.
 
-Thus `PARTIALLY_DELIVERED` and `DELIVERY_BLOCKED` are progress labels, **not locks over all unaffected containers**. Receiving API checks the specific container receipt state and open session.
+Таким образом, `PARTIALLY_DELIVERED` и `DELIVERY_BLOCKED` обозначают ход процесса, **а не блокировку всех незатронутых контейнеров**. API приёмки проверяет состояние получения конкретного контейнера и открытый сеанс.
 
-Closing all missing containers without any confirmed delivery yields `CLOSED_UNDELIVERED`. If at least one container is successfully received, the entire Shipment can eventually finish as `COMPLETED_WITH_ISSUES` after all other containers receive a terminal disposition and every tube inside RECEIVED containers has a recorded result. **No tube results are fabricated for UNDELIVERED_CLOSED containers.**
+Закрытие всех отсутствующих контейнеров без подтверждённой доставки даёт `CLOSED_UNDELIVERED`. Если хотя бы один контейнер успешно принят, отправку в итоге можно завершить как `COMPLETED_WITH_ISSUES`, когда остальные контейнеры получат окончательный исход, а каждая пробирка контейнеров RECEIVED — записанный результат. **Результаты пробирок для контейнеров UNDELIVERED_CLOSED не выдумываются.**
 
 ```mermaid
 stateDiagram-v2
@@ -88,43 +88,43 @@ stateDiagram-v2
     COMPLETED_WITH_ISSUES --> RECEIVING: lab manager reopen
 ```
 
-The diagram is illustrative; the **precedence rules above** specify transitions when multiple containers change in different orders (including returning from PARTIALLY_DELIVERED to that same coarse status).
+Диаграмма иллюстративная; **правила приоритета выше** определяют переходы, когда несколько контейнеров меняются в разном порядке (включая возврат из PARTIALLY_DELIVERED в тот же укрупнённый статус).
 
-## 4. Container issue and two-stage resolution
+## 4. Проблема контейнера и двухэтапное разрешение
 
-Container issue categories: `MISSING` and `REJECTED` (both require applicable seeded reason code). One OPEN issue per container.
+Категории проблем контейнера: `MISSING` и `REJECTED` (для обеих требуется подходящий код причины из начального каталога). Одна проблема OPEN на контейнер.
 
-1. A Courier (MISSING) or destination Lab Operator (MISSING/REJECTED) reports a problem for an IN_TRANSIT/DELIVERY_PENDING container. Set `container.delivery_status=BLOCKED`, store issue, withdraw PENDING delivery attempt if present, append audit. **Other containers do not change.**
-2. REGIONAL_OPERATIONS in Shipment region creates a **resolution proposal** for this one OPEN issue: `RETRY_DELIVERY` or `CLOSE_UNDELIVERED`, reason required. Proposal is `PENDING` and has **no effect on custody**.
-3. A distinct `LAB_MANAGER` of the destination Lab **approves** or **rejects** that exact PENDING proposal. An approval re-checks issue status, container state, role, actors, outstanding attempts, and applies the proposed transition **atomically with audit**. Rejection keeps container BLOCKED and issue OPEN; a new proposal may follow.
-4. An approved RETRY resolves issue and moves this container to IN_TRANSIT; the next Courier delivery attempt is new. An approved CLOSE marks issue CLOSED_UNDELIVERED and container UNDELIVERED_CLOSED, with a durable reason/history.
-5. A Courier cannot confirm lab receipt; regional operations cannot approve its own proposal even if simultaneously granted LAB_MANAGER (different user IDs). This approval is **separate from** bilateral delivery handoff.
+1. Курьер (MISSING) или оператор лаборатории назначения (MISSING/REJECTED) сообщает о проблеме контейнера IN_TRANSIT/DELIVERY_PENDING. Установить `container.delivery_status=BLOCKED`, сохранить проблему, отозвать попытку доставки PENDING, если она есть, добавить аудит. **Остальные контейнеры не меняются.**
+2. REGIONAL_OPERATIONS региона отправки создаёт **предложение решения** для этой проблемы OPEN: `RETRY_DELIVERY` или `CLOSE_UNDELIVERED`, причина обязательна. Предложение имеет статус `PENDING` и **не влияет на ответственность**.
+3. Другой пользователь `LAB_MANAGER` лаборатории назначения **одобряет** или **отклоняет** именно это предложение PENDING. Одобрение повторно проверяет статус проблемы, состояние контейнера, роль, участников, незавершённые попытки и применяет предложенный переход **атомарно с аудитом**. Отклонение оставляет контейнер BLOCKED, проблему OPEN; затем возможно новое предложение.
+4. Одобренный RETRY разрешает проблему и переводит контейнер в IN_TRANSIT; следующая попытка доставки курьером будет новой. Одобренный CLOSE помечает проблему CLOSED_UNDELIVERED, а контейнер UNDELIVERED_CLOSED с долговечным хранением причины и истории.
+5. Курьер не может подтвердить получение лабораторией; региональные операторы не могут одобрить собственное предложение даже при одновременном наличии LAB_MANAGER (разные ID пользователей). Это одобрение **отдельно от** двусторонней передачи при доставке.
 
-**Physical custody:** a refused container remains Courier responsibility until resolution takes effect. An approved administrative closure does not prove that a return occurred; physical disposition after closure stays outside LabTrack MVP.
+**Физическая ответственность:** непринятый контейнер остаётся в ответственности курьера до вступления решения в силу. Одобренное административное закрытие не доказывает возврат; физический исход после закрытия остаётся вне MVP LabTrack.
 
-## 5. Receiving sessions, tube results and reopening
+## 5. Сеансы приёмки, результаты пробирок и повторное открытие
 
-- Open the first `receiving_session(sequence=1,OPEN)` **when the first container becomes RECEIVED**.
-- Lab Operator may mark `ACCEPTED`, `MISSING`, `REJECTED` for each Sample in any RECEIVED container. For exceptional result, the seeded `reason_code` must match SAMPLE scope and result kind. Every update appends `receipt_revision` + `audit_event`.
-- A RECEIVED container's tubes may be inspected while the Shipment is still `PARTIALLY_DELIVERED`; do **not** require Shipment.status=RECEIVING for a tube update.
-- `complete_receiving` requires **every container terminal** (`RECEIVED` or `UNDELIVERED_CLOSED`), **at least one RECEIVED**, and **every item in RECEIVED containers non-NULL**. Undelivered containers' items stay NULL.
-- Final outcome: `COMPLETED` if all containers RECEIVED and all their tubes ACCEPTED, else `COMPLETED_WITH_ISSUES`.
-- LAB_MANAGER may reopen COMPLETED or COMPLETED_WITH_ISSUES without a time limit, providing reason. New OPEN session, previous sessions and revisions unchanged. Previous current results remain until explicitly corrected. The sealed manifest and container custody cannot be modified by reopening.
-- `CLOSED_UNDELIVERED` is final with no reopen command.
+- Открыть первый `receiving_session(sequence=1,OPEN)` **при переходе первого контейнера в RECEIVED**.
+- Оператор лаборатории может ставить `ACCEPTED`, `MISSING`, `REJECTED` каждому образцу любого контейнера RECEIVED. Для исключительного результата `reason_code` из начального каталога должен соответствовать области SAMPLE и виду результата. Каждое изменение добавляет `receipt_revision` + `audit_event`.
+- Пробирки контейнера RECEIVED можно проверять, пока отправка ещё `PARTIALLY_DELIVERED`; **не** требовать Shipment.status=RECEIVING для изменения пробирки.
+- `complete_receiving` требует **окончательного состояния каждого контейнера** (`RECEIVED` или `UNDELIVERED_CLOSED`), **хотя бы одного RECEIVED** и **ненулевого результата каждого элемента контейнеров RECEIVED**. Элементы недоставленных контейнеров остаются NULL.
+- Окончательный результат: `COMPLETED`, если все контейнеры RECEIVED и все их пробирки ACCEPTED, иначе `COMPLETED_WITH_ISSUES`.
+- LAB_MANAGER может повторно открыть COMPLETED или COMPLETED_WITH_ISSUES без ограничения по времени, указав причину. Новый сеанс OPEN, предыдущие сеансы и версии неизменны. Предыдущие текущие результаты сохраняются до явного исправления. Повторное открытие не позволяет менять зафиксированный манифест и ответственность за контейнеры.
+- `CLOSED_UNDELIVERED` — окончательный статус без команды повторного открытия.
 
-## 6. Courier offline compatibility
+## 6. Совместимость с автономной работой курьера
 
-Offline pickup command represents the second confirmation of the **whole Shipment** Pickup; it scans/compares all sealed container codes. Offline delivery command initiates handoff for **exactly one container** by ID/code. Each has a stable `client_command_id`.
+Автономная команда получения представляет второе подтверждение получения **всей отправки**; она сканирует и сравнивает все коды зафиксированных контейнеров. Автономная команда доставки инициирует передачу **ровно одного контейнера** по ID/коду. У каждой стабильный `client_command_id`.
 
-Any command not yet synchronized is PENDING_SYNC locally and has zero server-side custody effect. After 24h pending it needs review; a server state conflict is rejected, never automatically rebased. Only live authorization and valid current state can apply a command. Both device-reported and server-recorded timestamps are visible, with the server timestamp authoritative.
+Любая ещё не синхронизированная команда локально имеет статус PENDING_SYNC и не влияет на ответственность на сервере. После 24 часов ожидания требуется рассмотрение; конфликт состояния сервера отклоняется без автоматического перебазирования. Применить команду можно только при действующей авторизации и допустимом текущем состоянии. Видны обе отметки времени — заявленная устройством и записанная сервером; авторитетна серверная отметка.
 
-## 7. Acceptance scenarios
+## 7. Приёмочные сценарии
 
-1. Three-container Shipment: C1 and C2 RECEIVED through separate bilateral handoffs, C3 BLOCKED REJECTED → Shipment PARTIALLY_DELIVERED; C1/C2 tube results allowed, C3 tube results forbidden.
-2. Regional operator proposes CLOSE_UNDELIVERED for C3 → no custody change. Lab Manager approves → C3 UNDELIVERED_CLOSED, Shipment RECEIVING. After all C1/C2 tubes explicitly processed → COMPLETED_WITH_ISSUES.
-3. Lab Manager rejects proposed RETRY for C3 → C3 remains BLOCKED; new proposal possible, no false delivery event.
-4. All containers UNDELIVERED_CLOSED after approvals → Shipment CLOSED_UNDELIVERED; never mark as completed receiving.
-5. LAB_MANAGER reopening completed mixed Shipment → new session; previously UNDELIVERED_CLOSED tubes cannot be accepted; revision history retained.
-6. Exactly the same Courier offline command replayed → identical server result; different payload with same ID → conflict, no double handoff.
+1. Отправка из трёх контейнеров: C1 и C2 RECEIVED через отдельные двусторонние передачи, C3 BLOCKED REJECTED → отправка PARTIALLY_DELIVERED; результаты пробирок C1/C2 разрешены, C3 запрещены.
+2. Региональный оператор предлагает CLOSE_UNDELIVERED для C3 → ответственность не меняется. Руководитель лаборатории одобряет → C3 UNDELIVERED_CLOSED, отправка RECEIVING. После явной обработки всех пробирок C1/C2 → COMPLETED_WITH_ISSUES.
+3. Руководитель лаборатории отклоняет предложенный RETRY для C3 → C3 остаётся BLOCKED; возможно новое предложение, ложного события доставки нет.
+4. Все контейнеры UNDELIVERED_CLOSED после одобрений → отправка CLOSED_UNDELIVERED; никогда не помечать как завершённую приёмку.
+5. LAB_MANAGER повторно открывает завершённую смешанную отправку → новый сеанс; ранее UNDELIVERED_CLOSED пробирки нельзя принять; история версий сохранена.
+6. Повтор точно такой же автономной команды курьера → тот же серверный результат; иное содержимое с тем же ID → конфликт без двойной передачи.
 
-**Test these against PostgreSQL locks**, not only state-machine unit tests.
+**Проверять это с блокировками PostgreSQL**, а не только модульными тестами автомата состояний.

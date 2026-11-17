@@ -1,92 +1,92 @@
-# LabTrack v0.6.1 — Verification, Test Matrix & Implementation Gates
+# LabTrack v0.6.1 — проверка, матрица тестов и контрольные условия реализации
 
-**Scope:** requirement-level verification plan and implementation gates, not a report of current test execution. Use **real PostgreSQL** for locks, triggers, partial indexes and migration testing. This plan does not establish capacity, SLA, clinical certification, or readiness for real medical data.
+**Область действия:** план проверки требований и контрольные условия реализации, а не отчёт о текущем выполнении тестов. Для блокировок, триггеров, частичных индексов и проверки миграций используйте **реальную PostgreSQL**. План не устанавливает производительность, SLA, клиническую сертификацию или готовность к реальным медицинским данным.
 
-## 1. P0 — Chain of custody
+## 1. P0 — цепочка передачи ответственности
 
-| Test | Precondition and expected result |
+| Тест | Предусловие и ожидаемый результат |
 |---|---|
-| unavailable_courier_after_pickup | Whole-Shipment Pickup CONFIRMED. Courier unavailable; cannot change courier ID; each undelivered container MISSING, regional proposal and distinct lab approval; no forged delivery |
-| pending_pickup_withdraw_no_physical_transfer | Sender confirms containers still at origin, withdraws Pickup then can cancel under READY_FOR_PICKUP rules; audit includes reason |
-| pending_pickup_physical_custody_disputed | Suspected physical release; normal cancellation must not falsely declare no transfer; incident required |
-| exceptional_receipt_two_independent_witnesses | One witness or one account with two roles insufficient; two valid distinct attestations necessary; must not set Courier confirmed_by |
-| exceptional_receipt_role_and_pickup_guard | Two distinct destination Lab staff required, at least one active LAB_MANAGER; regional resolver is not a witness; Pickup-unconfirmed cannot create RECEIVED; 403/409, no incident acting as Courier Pickup |
-| normal_vs_exceptional_concurrent_receipt | Two concurrent finalize paths produce at most one verified receipt evidence and one OPEN receiving session |
-| post_received_container_problem | Do not revert CONFIRMED handoff, mark each affected Sample REJECTED with scoped reason and revision/audit, reopen receiving if necessary |
-| proposal_owner_withdraw | Proposer can withdraw own PENDING with reason, another user cannot; next proposal valid afterward |
-| proposal_decide_withdraw_race | Approval and withdrawal concurrent under Shipment lock: exactly one wins, other 409; one custody effect |
-| stalled_handoff_review | Regional operator creates incident; appropriate Sender/Lab confirms own facts; no impersonation or auto-confirm |
+| unavailable_courier_after_pickup | Забор всей партии CONFIRMED. Курьер недоступен; ID курьера менять нельзя; каждый недоставленный контейнер MISSING, региональное предложение и одобрение другого сотрудника лаборатории; поддельной доставки нет |
+| pending_pickup_withdraw_no_physical_transfer | Отправитель подтверждает, что контейнеры остались у него, отзывает забор, затем может отменить по правилам READY_FOR_PICKUP; аудит включает причину |
+| pending_pickup_physical_custody_disputed | Подозрение на физическую выдачу; обычная отмена не должна ложно объявлять отсутствие передачи; требуется инцидент |
+| exceptional_receipt_two_independent_witnesses | Одного свидетеля или одной учётной записи с двумя ролями недостаточно; нужны два действительных разных свидетельства; нельзя устанавливать confirmed_by курьера |
+| exceptional_receipt_role_and_pickup_guard | Нужны два разных сотрудника целевой лаборатории, хотя бы один активный LAB_MANAGER; региональный сотрудник, принимающий решение, не является свидетелем; неподтверждённый забор не позволяет создать RECEIVED; 403/409, инцидент не подменяет забор курьером |
+| normal_vs_exceptional_concurrent_receipt | Два конкурентных пути завершения создают не более одного проверенного свидетельства получения и одной сессии приёмки OPEN |
+| post_received_container_problem | Не откатывать передачу CONFIRMED, отметить каждую затронутую пробирку REJECTED с причиной в разрешённой области и исправлением/аудитом, при необходимости повторно открыть приёмку |
+| proposal_owner_withdraw | Автор может отозвать собственное предложение PENDING с причиной, другой пользователь — нет; после этого допустимо следующее предложение |
+| proposal_decide_withdraw_race | Одновременные одобрение и отзыв под блокировкой партии: побеждает ровно один, другой получает 409; одно изменение передачи ответственности |
+| stalled_handoff_review | Региональный оператор создаёт инцидент; соответствующий отправитель/лаборатория подтверждает собственные факты; нет выдачи себя за другого или автоматического подтверждения |
 
-### Final OPEN-01–03 authorization and outcomes
+### Окончательные полномочия и результаты OPEN-01–03
 
-| Test | Expected |
+| Тест | Ожидается |
 |---|---|
-| exceptional_two_lab_operators | Two destination Lab Operators with no LAB_MANAGER are **insufficient** |
-| exceptional_manager_plus_operator | Two distinct destination Lab users, one active LAB_MANAGER, satisfy witness-role requirement when both attest personal physical presence |
-| exceptional_resolver_not_witness | Regional reviewer does not count as either destination Lab witness; no proxy Courier signature |
-| exceptional_pickup_not_confirmed | Even two eligible witnesses cannot move container to RECEIVED without a normally confirmed whole-Shipment Pickup |
-| pickup_incident_admin_only | Origin Sender attestation + regional NO_PHYSICAL_TRANSFER review does **not** mark Pickup CONFIRMED or auto-cancel; Sender performs separate guarded withdraw |
-| stalled_delivery_admin_only | Lab Manager attestation + regional ESCALATED_NO_CUSTODY_CHANGE review leaves handoff unconfirmed |
-| exceptional_admin_finalize_atomic | Region resolves EXCEPTIONAL_RECEIPT_VERIFIED + receipt evidence + container RECEIVED + receiving session in one TX; concurrent normal route produces only one winning evidence |
-| cross_scope_or_revoked_attestation | Wrong Lab, wrong region, inactive membership or same witness twice rejected; full audit retained |
+| exceptional_two_lab_operators | Два оператора целевой лаборатории без LAB_MANAGER **недостаточны** |
+| exceptional_manager_plus_operator | Два разных пользователя целевой лаборатории, один с активной ролью LAB_MANAGER, удовлетворяют требованиям ролей свидетелей, если оба заявляют о личном физическом присутствии |
+| exceptional_resolver_not_witness | Региональный проверяющий не считается ни одним из свидетелей целевой лаборатории; подписи за курьера нет |
+| exceptional_pickup_not_confirmed | Даже два подходящих свидетеля не могут перевести контейнер в RECEIVED без обычного подтверждённого забора всей партии |
+| pickup_incident_admin_only | Свидетельство отправителя + региональное рассмотрение NO_PHYSICAL_TRANSFER **не** устанавливает забору CONFIRMED и не выполняет автоматическую отмену; отправитель выполняет отдельный защищённый отзыв |
+| stalled_delivery_admin_only | Свидетельство менеджера лаборатории + региональное рассмотрение ESCALATED_NO_CUSTODY_CHANGE оставляет передачу неподтверждённой |
+| exceptional_admin_finalize_atomic | Регион разрешает EXCEPTIONAL_RECEIPT_VERIFIED + свидетельство получения + контейнер RECEIVED + сессию приёмки в одной транзакции; конкурентный обычный маршрут создаёт только одно победившее свидетельство |
+| cross_scope_or_revoked_attestation | Неверная лаборатория, неверный регион, неактивное назначение прав или повтор того же свидетеля отклоняются; полный аудит сохраняется |
 
-## 2. P0 — Offline correctness
+## 2. P0 — корректность офлайн-работы
 
-| Test | Invariant |
+| Тест | Инвариант |
 |---|---|
-| server_issued_snapshot_age | Issued_at from DB; snapshot older than 24h yields REVIEW_REQUIRED, no change; client clock tampering irrelevant |
-| duplicate_across_90_day_window | Same ID/payload returns original replay, one audit/transition |
-| replay_after_response_archive | Once detailed response removed, tombstone still prevents reapplying custody |
-| changed_body_same_id | conflict, no new custody event |
-| two_devices_same_container | Independent queues with distinct IDs: one valid state transition, other stale/INVALID_STATE |
-| target_state_aba | IN_TRANSIT→DELIVERY_PENDING→IN_TRANSIT must increment state_version; stale command rejected even though enum matches |
-| unrelated_shipment_change | Another container's tube result or notification increments Shipment.version, but target Container/Handoff, manifest, Pickup phase and active Courier authorization remain unchanged: valid command may apply; **no relevant state rebase** |
-| revoked_courier | Snapshot issued before role revocation still denied at sync |
-| stale_after_manual_review | Original command not retrospectively applied; new authenticated live command/incident |
-| timeout_after_commit | Retrying exact command ID returns recorded outcome without duplicate event |
-| pickup_delivery_same_snapshot_link | A Delivery references only an APPLIED same-actor/Shipment/snapshot Pickup and exact recorded post-state versions |
-| tombstone_compaction_race | Concurrent detail compaction cannot release command identity or permit changed-payload reuse |
+| server_issued_snapshot_age | Issued_at берётся из БД; снимок старше 24 часов даёт REVIEW_REQUIRED, без изменений; подмена клиентских часов не влияет |
+| duplicate_across_90_day_window | Те же ID/содержимое возвращают исходный сохранённый результат, один аудит/переход |
+| replay_after_response_archive | После удаления подробного ответа запись-маркер по-прежнему предотвращает повторное изменение передачи ответственности |
+| changed_body_same_id | Конфликт, нового события передачи ответственности нет |
+| two_devices_same_container | Независимые очереди с разными ID: один допустимый переход состояния, другая команда устаревает/INVALID_STATE |
+| target_state_aba | IN_TRANSIT→DELIVERY_PENDING→IN_TRANSIT обязано увеличить state_version; устаревшая команда отклоняется, даже если значение перечисления совпадает |
+| unrelated_shipment_change | Результат пробирки другого контейнера или уведомление увеличивает Shipment.version, но целевой контейнер/передача, манифест, фаза забора и активные полномочия курьера не меняются: допустимая команда может примениться; **значимое состояние не согласуется автоматически** |
+| revoked_courier | Снимок выдан до отзыва роли, но при синхронизации доступ всё равно запрещён |
+| stale_after_manual_review | Исходная команда не применяется задним числом; новая аутентифицированная команда с подключением к серверу/инцидент |
+| timeout_after_commit | Повтор точного ID команды возвращает записанный результат без дублирующего события |
+| pickup_delivery_same_snapshot_link | Доставка ссылается только на забор APPLIED того же исполнителя/партии/снимка и точные записанные версии состояния после него |
+| tombstone_compaction_race | Конкурентное сокращение подробностей не может освободить идентичность команды или разрешить повторное использование с изменённым содержимым |
 
-**Q12 API dependency:** `PATCH /shipments/{shipment_id}` updates expected_delivery_at in DRAFT; a draft originally created with null must be able to acquire a future deadline and seal. After seal deadline editing is forbidden in this MVP contract.
+**Зависимость API Q12:** `PATCH /shipments/{shipment_id}` обновляет expected_delivery_at в DRAFT; черновик, изначально созданный с null, должен позволять задать будущий срок и запечатать его. После запечатывания редактирование срока в этом контракте MVP запрещено.
 
-## 3. P1 — Data validation, API and operations
+## 3. P1 — проверка данных, API и операции
 
-| Test | Requirement |
+| Тест | Требование |
 |---|---|
-| draft_without_deadline | CreateShipment DRAFT accepts null expected_delivery_at |
-| update_draft_deadline_and_seal | Draft update endpoint sets future deadline, then seal succeeds; past/null at seal rejected |
-| pilot_destination_enforced | Wrong Lab destination rejected both on CreateShipment and seal even with forged API request |
-| six_reason_codes | All six seeded with exact scope/kind/RU labels; inactive/mismatched code rejected; no CRUD |
-| inbox_read_unread_idor | User can read own, not another user's notification; read twice idempotent; unread-count changes once |
-| duplicate_notification_task | Celery retry cannot duplicate (recipient,event,type) row; Redis outage leaves persisted business status available via dashboard |
-| stall_thresholds | Pickup 4h, Container Delivery 4h, pending proposal 24h, shipment expected_delivery_at; alert only, no custody mutation |
-| analytics_day_week_utc | Day boundaries UTC and Monday-based UTC week; from inclusive/to exclusive |
-| analytics_full_vs_partial | All-container RECEIVED Shipment included in full mean; partial only in container-specific mean; undelivered excluded |
-| analytics_reopen | Latest results and state counted once, event/revision history append only |
-| sealed_manifest_db | Direct SQL insert/update/delete after seal blocked, and concurrent seal vs update serialized/retried safely |
+| draft_without_deadline | CreateShipment DRAFT принимает null expected_delivery_at |
+| update_draft_deadline_and_seal | Конечная точка обновления черновика задаёт будущий срок, затем запечатывание успешно; прошлый срок/null при запечатывании отклоняются |
+| pilot_destination_enforced | Неверная целевая лаборатория отклоняется при CreateShipment и запечатывании даже с поддельным запросом API |
+| six_reason_codes | Все шесть кодов созданы с точными scope/kind/русскими подписями; неактивный/несоответствующий код отклоняется; CRUD нет |
+| inbox_read_unread_idor | Пользователь может читать собственное уведомление, но не чужое; повторная отметка прочитанным идемпотентна; unread-count меняется один раз |
+| duplicate_notification_task | Повтор Celery не может дублировать строку (recipient,event,type); сбой Redis оставляет сохранённый бизнес-статус доступным через панель |
+| stall_thresholds | Забор 4 часа, доставка контейнера 4 часа, ожидающее предложение 24 часа, expected_delivery_at партии; только оповещение, без изменения передачи ответственности |
+| analytics_day_week_utc | Границы суток UTC и неделя с понедельника UTC; from включительно/to исключительно |
+| analytics_full_vs_partial | Партия со всеми контейнерами RECEIVED входит в среднее полной доставки; частичная — только в среднее по контейнерам; недоставленные исключаются |
+| analytics_reopen | Последние результаты и состояние учитываются один раз, история событий/исправлений только дополняется |
+| sealed_manifest_db | Прямые SQL insert/update/delete после запечатывания блокируются, конкурентные запечатывание и обновление безопасно сериализуются/повторяются |
 
-## 4. Cross-cutting gates
+## 4. Сквозные контрольные условия
 
-- Auth: Argon2id, short-lived JWT, per-use-case active RBAC and tenant/region scope, IDOR masked 404 when appropriate, tests for region analyst aggregate-only.
-- DB: each state mutation + audit + revisions + idempotency response shares one PostgreSQL transaction; no partial effects upon audit failure.
-- Triggers: DB owner/runtime roles distinct; direct SQL bypass test; test SQLSTATE 40P01 retry without double commit.
-- Stage B acceptance: Sample/external-reference scope; optional draft deadline; configured destination validation; courier region membership; one-to-many containers; duplicate Sample exclusion; same-key replay and changed-body conflict; six reason-code labels; seal deadline/state; direct SQL immutability and runtime non-owner privilege checks.
-- API: OpenAPI JSON schema validation and contract tests comparing FastAPI runtime-generated specification to agreed design; explicit 409/422/403/404 cases.
-- Offline: no access tokens in IndexedDB, queue survives refresh, per-account logout purge, per-command ack persisted before queue removal.
-- Courier PWA: shell loads offline without caching API responses; queue remains for the same user after reload/reauth; account-switch cancel/failure preserves the prior session and blocks background interaction; lost response resends exact command ID and payload; local pending is visibly distinct from server custody.
-- Operations: container event history reconstructs who asserted custody and via which evidence method; never confuse EXCEPTIONAL with normal Courier confirmation.
-- Synthetic-environment acceptance: fixtures, smoke checks, backup/restore, structured logs, and CI are deployment verification targets. They do not establish clinical certification or readiness for real medical data.
+- Аутентификация и авторизация: Argon2id, короткоживущий JWT, активные RBAC и область организации/региона для каждого сценария, скрывающий IDOR ответ 404 при необходимости, тесты доступа регионального аналитика только к агрегатам.
+- БД: каждое изменение состояния + аудит + исправления + ответ идемпотентности входят в одну транзакцию PostgreSQL; при сбое аудита частичных эффектов нет.
+- Триггеры: роли владельца БД и приложения различаются; тест обхода через прямой SQL; тест повтора SQLSTATE 40P01 без двойной фиксации.
+- Приёмка этапа B: область доступа пробирки/внешней ссылки; необязательный срок черновика; проверка настроенного получателя; принадлежность курьера региону; связь один-ко-многим с контейнерами; исключение повторной пробирки; повтор с тем же ключом и конфликт изменённого тела; шесть подписей кодов причин; срок/состояние запечатывания; неизменяемость при прямом SQL и проверки прав роли приложения, не являющейся владельцем.
+- API: проверка JSON-схемы OpenAPI и контрактные тесты сравнения спецификации, сформированной работающим FastAPI, с согласованным проектом; явные случаи 409/422/403/404.
+- Офлайн-работа: токенов доступа в IndexedDB нет, очередь переживает обновление страницы, выход очищает данные отдельной учётной записи, подтверждение каждой команды сохраняется до удаления из очереди.
+- PWA курьера: оболочка загружается офлайн без кеширования ответов API; очередь сохраняется для того же пользователя после перезагрузки/повторной аутентификации; отмена/ошибка смены учётной записи сохраняет прежнюю сессию и блокирует фоновое взаимодействие; при потере ответа повторно отправляются точные ID и содержимое команды; локальное ожидание визуально отличается от серверной передачи ответственности.
+- Операции: история событий контейнера восстанавливает, кто заявил передачу ответственности и каким методом свидетельства; EXCEPTIONAL никогда не смешивается с обычным подтверждением курьера.
+- Приёмка синтетической среды: тестовые данные, контрольные проверки, резервное копирование/восстановление, структурированные журналы и CI — цели проверки развёртывания. Они не устанавливают клиническую сертификацию или готовность к реальным медицинским данным.
 
-## 5. Definition of Ready vs Done
+## 5. Критерии готовности спецификации и завершённости реализации
 
-**Specification Ready for Foundation:** all 19 selected answers recorded, v0.6.1 API and schema draft coherent, core normal workflow unchanged.
+**Спецификация готова к фундаменту:** все 19 выбранных ответов записаны, черновики API и схемы v0.6.1 согласованы, основной обычный рабочий процесс не изменён.
 
-**Exceptional Receipt acceptance:** OPEN-01 (two distinct destination Lab witnesses, at least one LAB_MANAGER), OPEN-02 (already CONFIRMED whole-Shipment Pickup), OPEN-03 (region opens/reviews; origin Sender or destination Lab attests as themselves; region records separate outcome) are **APPROVED**. Implementations must pass strict authorization, physical-evidence attestation and PostgreSQL concurrency tests.
+**Приёмка исключительного получения:** OPEN-01 (два разных свидетеля целевой лаборатории, хотя бы один LAB_MANAGER), OPEN-02 (уже CONFIRMED забор всей партии), OPEN-03 (регион открывает/рассматривает; отправитель или целевая лаборатория свидетельствуют от своего имени; регион записывает отдельный результат) **УТВЕРЖДЕНЫ**. Реализации должны проходить строгие тесты полномочий, свидетельств физических фактов и конкурентности PostgreSQL.
 
-**Offline acceptance (OPEN-04 APPROVED):** manifest revision, target Container/Handoff version, Pickup phase and active authorization are relevant; unrelated Shipment bookkeeping alone is not. The 24-hour snapshot guard, 90-day replay, tombstones, two-device conflicts and explicit same-snapshot Pickup→Delivery dependency are Stage G acceptance requirements.
+**Приёмка офлайн-работы (OPEN-04 УТВЕРЖДЕНО):** значимы версия манифеста, версия целевого контейнера/передачи, фаза забора и активные полномочия; несвязанные учётные изменения партии сами по себе незначимы. Защита по возрасту снимка 24 часа, повторное получение результата 90 дней, записи-маркеры, конфликты двух устройств и явная зависимость забора→доставки по одному снимку — приёмочные требования этапа G.
 
-**Stage G test boundary:** Backend tests exercise PostgreSQL behavior, while the Playwright UI suite intercepts `/api/v1/**` and tests browser/offline behavior separately. The mocked browser suite does not exercise the Vite app against live FastAPI/PostgreSQL. Production hosting and compaction scheduling are outside Stage G.
+**Граница тестов этапа G:** серверные тесты проверяют поведение PostgreSQL, а набор тестов интерфейса Playwright перехватывает `/api/v1/**` и отдельно проверяет браузерное/офлайн-поведение. Браузерный набор с имитациями не проверяет приложение Vite с работающими FastAPI/PostgreSQL. Производственный хостинг и расписание сокращения данных не входят в этап G.
 
-**Stage I acceptance boundary:** `npm run test:acceptance:local` exercises the Sender→Courier→Lab workflow against disposable PostgreSQL and local FastAPI/Vite. It is separate from the default mocked browser suite and does not certify a hosted environment.
+**Граница приёмки этапа I:** `npm run test:acceptance:local` проверяет рабочий процесс отправитель→курьер→лаборатория на одноразовой PostgreSQL и локальных FastAPI/Vite. Он отделён от стандартного браузерного набора с имитациями и не сертифицирует размещённую среду.
 
-**Scope control:** no new third Sample/Container discrepancy type, no phantom witness signatures, no retrospective custody acceptance from stale commands, no Courier reassignment after seal.
+**Контроль области:** нет нового третьего типа расхождения пробирки/контейнера, фиктивных подписей свидетелей, принятия передачи ответственности задним числом из устаревших команд или переназначения курьера после запечатывания.

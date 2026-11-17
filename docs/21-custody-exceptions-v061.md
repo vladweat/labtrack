@@ -1,73 +1,73 @@
-# LabTrack v0.6.1 — Approved Custody Incidents & Exceptional Receipt
+# LabTrack v0.6.1 — Одобренные инциденты ответственности и исключительная приёмка
 
-**Requirements status: APPROVED for the synthetic MVP (2026-11-01).** OPEN-01–03 are closed in the [Decision Register](20-decisions-v061.md). This is a normative specification; custody-incident and exceptional-receipt behavior is implemented in the backend. It is not legal proof or a digital signature. See [workflows](workflows.md) for the implementation summary.
+**Статус требований: ОДОБРЕНЫ для синтетического MVP (2026-11-01).** OPEN-01–03 закрыты в [Реестре решений](20-decisions-v061.md). Это нормативная спецификация; поведение инцидентов ответственности и исключительной приёмки реализовано на сервере. Оно не является юридическим доказательством или цифровой подписью. Описание реализации — в [процессах](workflows.md).
 
-## 1. Normal and exceptional receipt evidence
+## 1. Доказательства обычной и исключительной приёмки
 
-Normal Pickup remains Shipment-wide, separately confirmed by Sender and assigned Courier; Normal Delivery remains per-container, initiated by Courier and confirmed by destination Lab. Their roles and original audit identities are immutable.
+Обычное получение курьером остаётся общим для отправки, с отдельными подтверждениями отправителя и назначенного курьера; обычная доставка остаётся поконтейнерной, инициируется курьером и подтверждается лабораторией назначения. Их роли и исходные идентификаторы аудита неизменны.
 
-**Exceptional Delivery** applies only to a **physically presented** sealed container when the assigned Courier cannot initiate/finish their Delivery confirmation. Two independent, physically present employees of the destination Lab, **at least one LAB_MANAGER**, each attest personally under their own authenticated account. A region-scoped REGIONAL_OPERATIONS member records the separate administrative decision, which may create EXCEPTIONAL receipt evidence. **Never create or modify a Courier-signed CONFIRMED Handoff on their behalf.**
+**Исключительная доставка** применяется только к **физически предъявленному** зафиксированному контейнеру, когда назначенный курьер не может инициировать/завершить своё подтверждение доставки. Два независимых физически присутствующих сотрудника лаборатории назначения, **хотя бы один LAB_MANAGER**, каждый лично свидетельствуют под собственной аутентифицированной учётной записью. Участник REGIONAL_OPERATIONS с правами региона записывает отдельное административное решение, которое может создать доказательство приёмки EXCEPTIONAL. **Никогда не создавать и не изменять подписанную курьером передачу CONFIRMED от его имени.**
 
-A person with both roles counts as a single witness; witness actors cannot equal one another or the regional resolver.
+Человек с обеими ролями считается одним свидетелем; свидетели не могут совпадать друг с другом или с региональным проверяющим.
 
-## 2. Entity and event model
+## 2. Модель сущностей и событий
 
-- `CustodyIncident`: id, shipment_id, container_id nullable, handoff_id nullable, phase PICKUP/DELIVERY, kind, status, reason, opened_by/at, resolved_by/at, outcome, audit. Types are administrative, **not** extra Sample/Container discrepancy kinds.
-- `CustodyAttestation`: incident_id, actor user_id, org_id/role snapshot, assertion of observed facts, container code if relevant, server timestamp; unique (incident_id,user_id), append-only.
-- `ContainerReceiptEvidence`: unique container_id; method NORMAL (confirmed_delivery_handoff_id) **xor** EXCEPTIONAL (resolved_incident_id); verified_by, server verified_at, immutable.
-- `Handoff.status=SUPERSEDED`: only a **PENDING DELIVERY** attempt can be superseded by authorized exceptional receipt. Existing CONFIRMED handoffs remain immutable. A missing Courier is never recorded as confirmed.
-- Proposed incident statuses `OPEN → PENDING_EVIDENCE → UNDER_REVIEW → RESOLVED` or `REJECTED`. A `RESOLVED` incident records a specific outcome, which **may mean administrative closure without changing custody**.
+- `CustodyIncident`: id, shipment_id, необязательный container_id, необязательный handoff_id, этап PICKUP/DELIVERY, kind, status, reason, opened_by/at, resolved_by/at, outcome, аудит. Типы административные, **не** дополнительные виды расхождений образцов/контейнеров.
+- `CustodyAttestation`: incident_id, user_id участника, снимок org_id/роли, утверждение о наблюдавшихся фактах, код контейнера, если применимо, серверное время; уникальность (incident_id,user_id), только добавление.
+- `ContainerReceiptEvidence`: уникальный container_id; метод NORMAL (confirmed_delivery_handoff_id) **исключающее ИЛИ** EXCEPTIONAL (resolved_incident_id); verified_by, серверное verified_at, неизменность.
+- `Handoff.status=SUPERSEDED`: только попытка **PENDING DELIVERY** может быть замещена авторизованной исключительной приёмкой. Существующие передачи CONFIRMED неизменны. Отсутствующий курьер никогда не записывается как подтвердивший.
+- Предложенные статусы инцидента `OPEN → PENDING_EVIDENCE → UNDER_REVIEW → RESOLVED` или `REJECTED`. Инцидент `RESOLVED` записывает конкретный исход, который **может означать административное закрытие без изменения ответственности**.
 
-Suggested incident kinds: COURIER_UNAVAILABLE_AFTER_PICKUP, PICKUP_UNCONFIRMED, COURIER_DELIVERY_CONFIRMATION_UNAVAILABLE, HANDOFF_STALLED, OFFLINE_CONFLICT.
+Предлагаемые виды инцидентов: COURIER_UNAVAILABLE_AFTER_PICKUP, PICKUP_UNCONFIRMED, COURIER_DELIVERY_CONFIRMATION_UNAVAILABLE, HANDOFF_STALLED, OFFLINE_CONFLICT.
 
-## 3. Final authorization / outcome matrix (OPEN-03)
+## 3. Итоговая матрица авторизации и исходов (OPEN-03)
 
-| Phase / scenario | Opens review | Required attestations | Administrative finalizer | Permitted effect |
+| Этап / сценарий | Кто открывает рассмотрение | Обязательные свидетельства | Кто завершает административно | Допустимый эффект |
 |---|---|---|---|---|
-| Unfinished Pickup, Courier unavailable | REGIONAL_OPERATIONS of Shipment region | Origin `SENDER_OPERATOR` attests location / whether physical release occurred | REGION-scoped `REGIONAL_OPERATIONS` | If no physical release, Sender uses **existing** Pickup withdraw and possibly pre-pickup cancel. Incident resolution cannot confirm Pickup. If custody disputed, record `ESCALATED_NO_CUSTODY_CHANGE` |
-| Long-stalled ordinary Delivery with no physical receipt proof | REGIONAL_OPERATIONS | Destination LAB_MANAGER confirms what lab physically observed | REGIONAL_OPERATIONS | Review only: no fake Delivery confirmation; use Container MISSING/REJECTED and approved two-stage issue resolution as applicable, else `ESCALATED_NO_CUSTODY_CHANGE` |
-| Container physically present; Courier confirmation unavailable | REGIONAL_OPERATIONS | **Two different active destination-Lab staff, physically present; at least one LAB_MANAGER** | REGIONAL_OPERATIONS (not either witness) | If full Shipment Pickup was **already CONFIRMED** and other guards pass, create EXCEPTIONAL evidence and move only that container to RECEIVED atomically |
-| Courier absent after confirmed whole-Shipment Pickup, undelivered container | REGIONAL_OPERATIONS, or normal scoped report of container MISSING | Lab-side observations as applicable, or existing issue reporting evidence | REGIONAL_OPERATIONS reviews, while **separate** ContainerIssue approval still requires distinct LAB_MANAGER | Only normal ContainerIssue RETRY_DELIVERY / CLOSE_UNDELIVERED route changes a blocked container; do not reassign Courier |
-| Offline stale command / disputed physical action | REGIONAL_OPERATIONS | Sender for origin-side facts or LAB_MANAGER for destination facts | REGIONAL_OPERATIONS | Investigate; if current state permits, **new live authenticated operation** by rightful actor, otherwise incident remains unresolved/escalated. Never execute original stale payload retroactively |
+| Незавершённое получение курьером, курьер недоступен | REGIONAL_OPERATIONS региона отправки | `SENDER_OPERATOR` отправления свидетельствует о местонахождении / факте физической выдачи | `REGIONAL_OPERATIONS` с правами REGION | Если физической выдачи не было, отправитель использует **существующий** отзыв получения и, возможно, отмену до получения. Разрешение инцидента не может подтвердить получение. При спорной ответственности записать `ESCALATED_NO_CUSTODY_CHANGE` |
+| Долго зависшая обычная доставка без доказательства физического получения | REGIONAL_OPERATIONS | LAB_MANAGER назначения подтверждает физически наблюдавшиеся лабораторией факты | REGIONAL_OPERATIONS | Только рассмотрение: без ложного подтверждения доставки; использовать MISSING/REJECTED контейнера и одобренное двухэтапное разрешение проблемы, где применимо, иначе `ESCALATED_NO_CUSTODY_CHANGE` |
+| Контейнер физически присутствует; подтверждение курьера недоступно | REGIONAL_OPERATIONS | **Два разных активных сотрудника лаборатории назначения, физически присутствующих; хотя бы один LAB_MANAGER** | REGIONAL_OPERATIONS (ни один из свидетелей) | Если получение всей отправки **уже CONFIRMED** и остальные условия соблюдены, атомарно создать доказательство EXCEPTIONAL и перевести только этот контейнер в RECEIVED |
+| Курьер отсутствует после подтверждённого получения всей отправки, контейнер недоставлен | REGIONAL_OPERATIONS либо обычное уполномоченное сообщение MISSING контейнера | Наблюдения лаборатории, где применимо, либо существующие доказательства сообщения о проблеме | REGIONAL_OPERATIONS рассматривает, но **отдельное** одобрение ContainerIssue по-прежнему требует другого LAB_MANAGER | Только обычный путь ContainerIssue RETRY_DELIVERY / CLOSE_UNDELIVERED меняет заблокированный контейнер; курьера не переназначать |
+| Устаревшая автономная команда / спорное физическое действие | REGIONAL_OPERATIONS | Отправитель для фактов отправления либо LAB_MANAGER для фактов назначения | REGIONAL_OPERATIONS | Расследовать; если текущее состояние допускает — **новая аутентифицированная операция с подключением** правомочного участника, иначе инцидент остаётся нерешённым/эскалированным. Никогда не выполнять исходное устаревшее содержимое задним числом |
 
-**Distinct roles and authorizations:** actor identity is from JWT; server verifies current active membership and Shipment region/destination. Region opener may also be the administrative finalizer if still authorized, but **may not count as an attesting laboratory witness**. For normal ContainerIssue resolution the existing separate proposer/approver rule still applies; administrative incident closure cannot bypass that second-person approval.
+**Раздельные роли и права:** личность участника берётся из JWT; сервер проверяет текущее активное членство и регион/назначение отправки. Региональный инициатор может также административно завершить рассмотрение, если права сохранились, но **не может считаться свидетельствующим сотрудником лаборатории**. Для обычного решения ContainerIssue сохраняется правило разных автора предложения/утверждающего; административное закрытие инцидента не может обойти одобрение вторым человеком.
 
-## 4. Exceptional receipt transaction (OPEN-01 / OPEN-02)
+## 4. Транзакция исключительной приёмки (OPEN-01 / OPEN-02)
 
-Required preconditions:
-1. Manifest sealed, exact container belongs to Shipment, and **whole-Shipment Pickup was already confirmed by normal Sender/Courier handoff**. A pending, cancelled, or disputed Pickup prohibits exceptional receipt **even if incident review exists**. Incident resolution never fabricates a confirmed Courier Pickup.
-2. Container is IN_TRANSIT or DELIVERY_PENDING and not previously RECEIVED, CLOSED_UNDELIVERED or otherwise terminal; no verified receipt evidence already exists.
-3. Incident opened by REGIONAL_OPERATIONS for that container, linked to unavailable-Courier case, with audit and reason; all attestations refer to the same physical container ID/code.
-4. Two distinct witness accounts, both active members of **destination laboratory**, at least one active LAB_MANAGER; both independently attest actual physical presentation; each is physically present (human assertion recorded; software cannot independently prove physical presence).
-5. REGIONAL_OPERATIONS administrative resolver is **not one of witnesses** and is currently authorized in Shipment region; current scope/identity and original handoff attempts revalidated.
+Обязательные предусловия:
+1. Манифест зафиксирован, конкретный контейнер принадлежит отправке, **получение всей отправки уже подтверждено обычной передачей отправитель/курьер**. Ожидающее, отменённое или спорное получение запрещает исключительную приёмку **даже при наличии рассмотрения инцидента**. Разрешение инцидента никогда не создаёт вымышленное подтверждённое получение курьером.
+2. Контейнер IN_TRANSIT или DELIVERY_PENDING, ранее не RECEIVED, CLOSED_UNDELIVERED или в другом окончательном состоянии; проверенного доказательства приёмки ещё нет.
+3. Инцидент открыт REGIONAL_OPERATIONS для этого контейнера, связан со случаем недоступности курьера, с аудитом и причиной; все свидетельства относятся к одному физическому ID/коду контейнера.
+4. Две разные учётные записи свидетелей, обе с активным членством в **лаборатории назначения**, хотя бы одна с активным LAB_MANAGER; оба независимо свидетельствуют о фактическом физическом предъявлении; каждый физически присутствует (записывается утверждение человека; ПО не может независимо доказать физическое присутствие).
+5. Административный проверяющий REGIONAL_OPERATIONS — **не один из свидетелей** и сейчас уполномочен в регионе отправки; текущие область/личность и исходные попытки передачи повторно проверены.
 
-In **one PostgreSQL transaction**, lock Shipment → Container → linked Handoff/Incident/Evidence; verify attestations, statuses, version and no existing verified evidence; mark any PENDING Delivery handoff SUPERSEDED, create finalized EXCEPTIONAL evidence, set container RECEIVED and server received_at, keep `container.received_by=NULL` for EXCEPTIONAL (the regional decision-maker is **not** a physical Lab receiver), set `receipt_evidence.verified_by` to the regional decision-maker, preserve the actual lab witnesses in attestations, open first receiving session if needed, update Shipment aggregate state and append immutable audit. An EXCEPTIONAL evidence record references the deciding regional actor and the attestations/incident: it **does not** claim that actor was the physical receiving Lab Operator.
+В **одной транзакции PostgreSQL** блокировать отправку → контейнер → связанные передачу/инцидент/доказательство; проверить свидетельства, статусы, версию и отсутствие проверенного доказательства; пометить любую передачу доставки PENDING как SUPERSEDED, создать окончательное доказательство EXCEPTIONAL, задать контейнеру RECEIVED и серверное received_at, оставить `container.received_by=NULL` для EXCEPTIONAL (региональный принимающий решение **не** физический получатель лаборатории), установить `receipt_evidence.verified_by` в регионального принимающего решение, сохранить настоящих свидетелей лаборатории в свидетельствах, открыть первый сеанс приёмки при необходимости, обновить агрегатное состояние отправки и добавить неизменный аудит. Доказательство EXCEPTIONAL ссылается на регионального участника, принявшего решение, и свидетельства/инцидент: оно **не** утверждает, что этот участник был физически принимавшим оператором лаборатории.
 
-If rejected or contested, leave container unreceived; retain all attestations, incident history and error/review reason. Concurrent normal Lab confirmation vs exceptional finalizer: at most one verified receipt wins; other gets deterministic 409.
+При отклонении или споре оставить контейнер непринятым; сохранить все свидетельства, историю инцидента и причину ошибки/рассмотрения. При конкурентном обычном подтверждении лаборатории и исключительном завершении выигрывает не более одного проверенного доказательства; другая операция получает детерминированный 409.
 
-## 5. Other approved recovery behavior
+## 5. Другое одобренное поведение восстановления
 
-- **Q01:** after confirmed Pickup, do not replace Courier. Each container not presented to lab may be marked MISSING (CONTAINER_NOT_PRESENT) and individually goes through regional proposal + destination LAB_MANAGER approval for retry or terminal closure. RETRY cannot invent a new Courier.
-- **Q02:** Sender may withdraw own PENDING Pickup only when verified containers remain at origin and physical transfer did not occur; otherwise origin incident/review, no fictional cancellation. No reassignment after seal.
-- **Q04:** after RECEIVED keep custody/handoff. Each **affected Sample** individually REJECTED with matching Sample reason code, audit and revision, and LAB_MANAGER reopening if session was completed.
-- **Q05:** REGIONAL_OPERATIONS can withdraw **their own** PENDING resolution proposal with mandatory reason. Rejected/withdrawn proposal has no custody effect. Approval/withdrawal race serialized under Shipment lock.
-- **Q06:** long-stalled Handoff uses incident evidence matrix above, no automatic confirmation or proxy signature.
+- **Q01:** после подтверждённого получения не заменять курьера. Каждый не предъявленный лаборатории контейнер может быть отмечен MISSING (CONTAINER_NOT_PRESENT) и отдельно проходит региональное предложение и одобрение LAB_MANAGER назначения для повторной доставки или окончательного закрытия. RETRY не может создать вымышленного нового курьера.
+- **Q02:** отправитель может отозвать своё получение PENDING только когда проверено, что контейнеры остаются в отправлении и физической передачи не было; иначе инцидент/рассмотрение отправления без вымышленной отмены. Переназначения после фиксации нет.
+- **Q04:** после RECEIVED сохранять ответственность/передачу. Каждый **затронутый образец** отдельно REJECTED с соответствующим кодом причины образца, аудитом и версией, а также повторным открытием LAB_MANAGER, если сеанс был завершён.
+- **Q05:** REGIONAL_OPERATIONS может отозвать **собственное** предложение решения PENDING с обязательной причиной. Отклонённое/отозванное предложение не влияет на ответственность. Гонка одобрения/отзыва сериализуется блокировкой отправки.
+- **Q06:** длительно зависшая передача использует приведённую выше матрицу доказательств инцидента, без автоматического подтверждения или подписи за другого.
 
-## 6. Invariant for tube-level receiving
+## 6. Инвариант приёмки на уровне пробирок
 
 `can_receive_item := parent_container.delivery_status=RECEIVED AND (verified NORMAL evidence OR verified EXCEPTIONAL evidence) AND Shipment has an OPEN receiving_session AND actor is authorized destination Lab user`.
 
-For EXCEPTIONAL method, **confirmed Pickup is an additional invariant**. No receipt evidence of either kind bulk-accepts all Sample items.
+Для метода EXCEPTIONAL **подтверждённое получение курьером — дополнительный инвариант**. Ни один вид доказательства приёмки не принимает массово все элементы образцов.
 
-## 7. Negative acceptance tests
+## 7. Негативные приёмочные тесты
 
-- A single staff member holding both LAB_OPERATOR and LAB_MANAGER roles cannot witness twice.
-- Two Lab Operators without any LAB_MANAGER fail. Witnesses from origin/other region fail. Resolver counted as witness fails.
-- Pending/disputed Pickup blocks exceptional receipt. An incident can be administratively resolved without turning Pickup CONFIRMED.
-- A direct SQL attempt to insert verified exceptional receipt without linked incident/two valid witnesses is blocked by protected service/trigger rules.
-- Concurrent normal Delivery vs exceptional confirmation cannot double-create evidence or an OPEN receiving session.
-- Courier account never receives fabricated confirmation, even if physical receipt succeeds exceptionally.
-- Wrong-region regional resolver and revoked witnesses cannot finalize; ensure current membership checked at decision time.
-- Existing two-stage ContainerIssue resolution still cannot be bypassed by incident resolution.
+- Один сотрудник с ролями LAB_OPERATOR и LAB_MANAGER не может свидетельствовать дважды.
+- Двух операторов лаборатории без LAB_MANAGER недостаточно. Свидетели отправления/другого региона не проходят. Учёт проверяющего как свидетеля не проходит.
+- Ожидающее/спорное получение блокирует исключительную приёмку. Инцидент может быть разрешён административно без перевода получения в CONFIRMED.
+- Прямая попытка SQL вставить проверенную исключительную приёмку без связанного инцидента/двух допустимых свидетелей блокируется защищёнными правилами сервиса/триггеров.
+- Конкурентные обычная доставка и исключительное подтверждение не могут создать двойное доказательство или сеанс приёмки OPEN.
+- Учётная запись курьера никогда не получает вымышленного подтверждения, даже если физическая приёмка прошла исключительным путём.
+- Региональный проверяющий другого региона и свидетели с отозванными правами не могут завершить; обеспечить проверку текущего членства при решении.
+- Существующее двухэтапное решение ContainerIssue по-прежнему нельзя обойти разрешением инцидента.
 
-This is approved **for coding and test implementation**, not operational deployment with patient data.
+Это одобрено **для написания кода и реализации тестов**, а не для эксплуатации с данными пациентов.

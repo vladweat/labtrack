@@ -1,41 +1,41 @@
-# LabTrack v0.5 — PostgreSQL Data Model Delta and Migration Design
+# LabTrack v0.5 — Изменения модели данных PostgreSQL и проект миграций
 
-> **Исторический документ (до v0.6).** Приоритет имеют [Decisions v0.6](15-decisions-v06.md), [Domain v0.6](16-domain-workflows-v06.md), [Data Model v0.6](17-data-model-v06.md), [API v0.6](18-api-v06.md). Этот текст может содержать устаревшие all-or-nothing handoff и unilateral resolution; не использовать его как актуальный контракт.
+> **Исторический документ (до v0.6).** Приоритет имеют [Решения v0.6](15-decisions-v06.md), [Доменная модель v0.6](16-domain-workflows-v06.md), [Модель данных v0.6](17-data-model-v06.md), [API v0.6](18-api-v06.md). Этот текст может содержать устаревшие правила передачи всей партии по принципу «всё или ничего» и одностороннего разрешения проблем; не использовать его как актуальный контракт.
 
-**Status:** proposed physical schema changes, **no SQL migrations have been executed**. The v0.4 schema is documented in [06-data-model.md](06-data-model.md). Accepted product decisions and state transitions: [10-domain-hardening-v05.md](10-domain-hardening-v05.md).
+**Статус:** предлагаемые изменения физической схемы, **SQL-миграции не выполнялись**. Схема v0.4 описана в [06-data-model.md](06-data-model.md). Утверждённые продуктовые решения и переходы состояний: [10-domain-hardening-v05.md](10-domain-hardening-v05.md).
 
-## 1. Change strategy
+## 1. Стратегия изменений
 
-Keep existing modular monolith and current tables; **migrate forward**, do not rewrite old migration history. PostgreSQL remains the sole source of truth. A Shipment is still the lock boundary. A tube may belong to one container only, and cancellation never releases a tube for reshipping in P0.
+Сохранить существующий модульный монолит и таблицы; **выполнять новые миграции вперёд**, не переписывать историю старых миграций. PostgreSQL остаётся единственным источником истины. Shipment остаётся границей блокировки. Пробирка принадлежит только одному контейнеру; отмена никогда не освобождает её для повторной отправки в P0.
 
-Two central choices reduce accidental dual truth:
+Два основных решения уменьшают риск появления двух источников истины:
 
-- **Sample discrepancies** remain the current receipt fields on `container_items`, with revisions recorded separately. Do not create second mutable SampleIssue status.
-- **Container discrepancies** live in `container_issues` because they occur **before receiving**, while physical handoff is still blocked.
+- **Расхождения пробирок** остаются текущими полями приёмки в `container_items`, а версии изменений записываются отдельно. Не создавать второй изменяемый статус SampleIssue.
+- **Расхождения контейнеров** хранятся в `container_issues`, поскольку возникают **до приёмки**, пока физическая передача заблокирована.
 
-## 2. New / extended tables
+## 2. Новые и расширенные таблицы
 
-| Table | Fields | Constraints / notes |
+| Таблица | Поля | Ограничения / примечания |
 |---|---|---|
-| `issue_reason_codes` | `id UUID PK, scope TEXT, kind TEXT, code TEXT, label TEXT, is_active BOOLEAN, created_at TIMESTAMPTZ` | `scope IN ('SAMPLE','CONTAINER')`, `kind IN ('MISSING','REJECTED')`, `UNIQUE(scope,kind,code)`; deactivation preserves historical reference |
-| `container_issues` | `id, shipment_id, container_id, kind, reason_code_id, comment NULL, status, reported_by, reported_at, resolved_by NULL, resolved_at NULL, resolution NULL, resolution_comment NULL` | FK shipment/container/user/reason; `kind=MISSING|REJECTED`; `status=OPEN|RESOLVED|CLOSED_UNDELIVERED`; no two OPEN issues for one container within a Shipment; container belongs to Shipment; record even if actual container absent |
-| `receiving_sessions` | `id, shipment_id, sequence, status, opened_by, opened_at, reopen_reason NULL, closed_by NULL, closed_at NULL` | `UNIQUE(shipment_id,sequence)`; `status=OPEN|CLOSED`; at most one OPEN session per shipment |
-| `receipt_revisions` | `id, receiving_session_id, container_item_id, old_result NULL, new_result, old_reason_code_id NULL, new_reason_code_id NULL, old_comment NULL, new_comment NULL, changed_by, changed_at` | Append-only; every change including initial result produces revision; old values copied from locked item; receiving session belongs to item's Shipment |
-| `sample_external_references` | `id, sample_id, system_code, reference_kind, external_id, created_at` | `UNIQUE(sample_id,system_code,reference_kind,external_id)`; opaque synthetic refs only; cardinality 1:N; no patient identifiers |
+| `issue_reason_codes` | `id UUID PK, scope TEXT, kind TEXT, code TEXT, label TEXT, is_active BOOLEAN, created_at TIMESTAMPTZ` | `scope IN ('SAMPLE','CONTAINER')`, `kind IN ('MISSING','REJECTED')`, `UNIQUE(scope,kind,code)`; деактивация сохраняет историческую ссылку |
+| `container_issues` | `id, shipment_id, container_id, kind, reason_code_id, comment NULL, status, reported_by, reported_at, resolved_by NULL, resolved_at NULL, resolution NULL, resolution_comment NULL` | Внешние ключи партии/контейнера/пользователя/причины; `kind=MISSING|REJECTED`; `status=OPEN|RESOLVED|CLOSED_UNDELIVERED`; не более одной проблемы OPEN на контейнер в Shipment; контейнер принадлежит Shipment; запись создаётся даже при физическом отсутствии контейнера |
+| `receiving_sessions` | `id, shipment_id, sequence, status, opened_by, opened_at, reopen_reason NULL, closed_by NULL, closed_at NULL` | `UNIQUE(shipment_id,sequence)`; `status=OPEN|CLOSED`; не более одного сеанса OPEN на партию |
+| `receipt_revisions` | `id, receiving_session_id, container_item_id, old_result NULL, new_result, old_reason_code_id NULL, new_reason_code_id NULL, old_comment NULL, new_comment NULL, changed_by, changed_at` | Только добавление; каждое изменение, включая первый результат, создаёт версию; старые значения копируются из заблокированной позиции; сеанс приёмки принадлежит Shipment позиции |
+| `sample_external_references` | `id, sample_id, system_code, reference_kind, external_id, created_at` | `UNIQUE(sample_id,system_code,reference_kind,external_id)`; только непрозрачные синтетические ссылки; кратность 1:N; без идентификаторов пациентов |
 
-**Existing tables to extend:**
+**Расширяемые существующие таблицы:**
 
-- `shipments.status` CHECK adds `DELIVERY_BLOCKED`, `CLOSED_UNDELIVERED`; add `closed_at TIMESTAMPTZ NULL, closed_by UUID NULL, closure_reason TEXT NULL` for manual undelivered closure. Add `manifest_revision INTEGER NOT NULL DEFAULT 0`: increment during DRAFT manifest edits, freeze at seal, and keep independent of `shipments.version`.
-- `organization_memberships.role` allows `LAB_MANAGER` in a laboratory.
-- `regional_memberships.role` allows `REGIONAL_OPERATIONS` in a region, separate from read-only analyst.
-- `container_items`: replace text-only `receipt_reason` with `receipt_reason_code_id UUID NULL` and `receipt_comment TEXT NULL`; preserve `receipt_result`, `receipt_recorded_by`, `receipt_recorded_at`. For a repository with real data, backfill first, then remove `receipt_reason`; current repo is documentation-only.
-- `handoffs`: add `withdrawn_by UUID NULL`, `withdrawal_reason TEXT NULL`; a blocked Delivery can withdraw a PENDING handoff via scoped operational action and its audit; keep original actor/times.
-- `audit_events`: use existing append-only table; event type + safe details including `client_command_id` and untrusted `client_performed_at` when applicable. Do not replace `occurred_at` with a device timestamp.
-- `idempotency_records`: reuse current key/operation/request hash/response schema; enforce global lock-order protocol. For all offline commands set `operation='courier_offline_command'` (one stable namespace per actor) so reusing `client_command_id` with a different action or Shipment collides under `UNIQUE(actor_id,operation,key)`; the canonical request hash includes the entire command. **No duplicate offline-command persistence table is mandatory in MVP**: retain per-command replay responses here; per-command audit gives diagnostics.
+- CHECK для `shipments.status` дополняется `DELIVERY_BLOCKED`, `CLOSED_UNDELIVERED`; добавить `closed_at TIMESTAMPTZ NULL, closed_by UUID NULL, closure_reason TEXT NULL` для ручного закрытия недоставки. Добавить `manifest_revision INTEGER NOT NULL DEFAULT 0`: увеличивать при изменениях манифеста в DRAFT, фиксировать при запечатывании, сохранять независимость от `shipments.version`.
+- `organization_memberships.role` допускает `LAB_MANAGER` в лаборатории.
+- `regional_memberships.role` допускает `REGIONAL_OPERATIONS` в регионе отдельно от аналитика с правом только чтения.
+- `container_items`: заменить текстовое `receipt_reason` на `receipt_reason_code_id UUID NULL` и `receipt_comment TEXT NULL`; сохранить `receipt_result`, `receipt_recorded_by`, `receipt_recorded_at`. При реальных данных сначала заполнить новые поля, затем удалить `receipt_reason`; текущий репозиторий содержит только документацию.
+- `handoffs`: добавить `withdrawn_by UUID NULL`, `withdrawal_reason TEXT NULL`; заблокированная доставка может отозвать передачу PENDING через операционное действие в разрешённой области доступа с аудитом; сохранить исходного исполнителя и время.
+- `audit_events`: использовать существующую таблицу только с добавлением записей; тип события и безопасные подробности, включая `client_command_id` и недоверенное `client_performed_at`, где применимо. Не заменять `occurred_at` временем устройства.
+- `idempotency_records`: повторно использовать текущие ключ/операцию/хэш запроса/схему ответа; обеспечить глобальный протокол порядка блокировок. Для всех команд без сети задать `operation='courier_offline_command'` (единое стабильное пространство имён на исполнителя), чтобы повторное использование `client_command_id` с другим действием или Shipment конфликтовало по `UNIQUE(actor_id,operation,key)`; канонический хэш включает всю команду. **Отдельная дублирующая таблица команд без сети в MVP не обязательна**: хранить ответы для повторов каждой команды здесь; аудит каждой команды даёт диагностику.
 
-**Demo constraint:** sample codes, organization codes, external references and all fixtures are synthetic. An opaque external ID can be linkable to a patient in a real LIS; therefore it is **not automatically anonymous**. Access scope and retention for real data require separate review.
+**Ограничение демонстрации:** коды пробирок, организаций, внешние ссылки и все тестовые данные синтетические. Непрозрачный внешний ID может быть связан с пациентом в реальной ЛИС, поэтому **не является автоматически анонимным**. Области доступа и хранение реальных данных требуют отдельной проверки.
 
-## 3. CHECK and FK rules
+## 3. Правила CHECK и внешних ключей
 
 `container_items`:
 
@@ -57,13 +57,13 @@ CHECK (
 );
 ```
 
-`receipt_comment` length 1..500 when present after trimming (CHECK). Note: FK to an existing reason-code row is not alone enough to validate its `scope` and `kind`; implement a composite FK on `(scope,kind,code)` using appropriate schema fields or a protected database trigger, **plus** service validation. Do not claim plain `reason_code_id` FK enforces matching scope/kind.
+Длина `receipt_comment` — 1..500 после удаления краевых пробелов, если поле задано (CHECK). Внешнего ключа на существующий код причины недостаточно для проверки `scope` и `kind`; реализовать составной внешний ключ `(scope,kind,code)` с подходящими полями схемы либо защищённый триггер БД **и** проверку сервиса. Не утверждать, что обычный внешний ключ `reason_code_id` обеспечивает совпадение области и категории.
 
 `container_issues`:
 
-- Require non-null reason code for both kinds, optional comment.
-- Verify container belongs to Shipment using a composite FK: add `UNIQUE(transport_containers.id, shipment_id)` and reference `(container_id,shipment_id)`.
-- Deny OPEN issue duplicate for the same `(shipment_id,container_id)`:
+- Непустой код причины обязателен для обеих категорий, комментарий необязателен.
+- Проверять принадлежность контейнера к Shipment составным внешним ключом: добавить `UNIQUE(transport_containers.id, shipment_id)` и ссылаться на `(container_id,shipment_id)`.
+- Запретить повторную проблему OPEN для одинаковых `(shipment_id,container_id)`:
 
 ```sql
 CREATE UNIQUE INDEX uq_container_open_issue
@@ -71,8 +71,8 @@ ON container_issues (shipment_id, container_id)
 WHERE status = 'OPEN';
 ```
 
-- `resolved_by`, `resolved_at`, `resolution` are required for `RESOLVED` / `CLOSED_UNDELIVERED`; `resolution` is RETRY_DELIVERY or CLOSE_UNDELIVERED.
-- `issue_reason_codes.scope='CONTAINER'` and matching `kind` must be verified in the command layer or enforced with a composite FK/trigger.
+- `resolved_by`, `resolved_at`, `resolution` обязательны для `RESOLVED` / `CLOSED_UNDELIVERED`; `resolution` — RETRY_DELIVERY или CLOSE_UNDELIVERED.
+- Проверять `issue_reason_codes.scope='CONTAINER'` и совпадение `kind` в слое команд либо обеспечивать составным внешним ключом/триггером.
 
 `receiving_sessions`:
 
@@ -82,67 +82,67 @@ ON receiving_sessions (shipment_id)
 WHERE status = 'OPEN';
 ```
 
-Every new session increases sequence under the locked Shipment. The close operation marks the session CLOSED in the same transaction as Shipment finalization. No session is opened for CLOSED_UNDELIVERED.
+Каждый новый сеанс увеличивает sequence при заблокированном Shipment. Закрытие помечает сеанс CLOSED в одной транзакции с завершением Shipment. Для CLOSED_UNDELIVERED сеанс не открывается.
 
-`receipt_revisions` must be append-only and tied to the right Shipment; otherwise a wrong session could be used to forge an edit. Service validation, protected FK model, and DB restrictions on UPDATE/DELETE provide the guards. Create a revision on **every** receipt update, not just corrections.
+`receipt_revisions` допускает только добавление и должен быть связан с правильным Shipment; иначе неверный сеанс можно использовать для подделки изменения. Защиту обеспечивают проверка сервиса, защищённая модель внешних ключей и ограничения UPDATE/DELETE в БД. Создавать версию при **каждом** обновлении результата приёмки, а не только при исправлениях.
 
-`handoffs`: a pending Delivery handoff may be withdrawn by REGIONAL_OPERATIONS when a valid container issue blocks delivery. Persist `withdrawn_by`, `withdrawal_reason`, `withdrawn_at` in the same transaction. Preserve prior `attempt_no` history. Existing partial UNIQUE index still limits one non-withdrawn handoff per kind.
+`handoffs`: ожидающая передача при доставке может быть отозвана REGIONAL_OPERATIONS, когда допустимая проблема контейнера блокирует доставку. Сохранять `withdrawn_by`, `withdrawal_reason`, `withdrawn_at` в той же транзакции. Сохранить историю прежних `attempt_no`. Существующий частичный уникальный индекс по-прежнему допускает не более одной неотозванной передачи каждой категории.
 
-## 4. PostgreSQL trigger for sealed manifest
+## 4. Триггер PostgreSQL для запечатанного манифеста
 
-**Goal:** after seal, block changes to the **identity and membership** of every Shipment container and every Sample in the manifest, even via accidental SQL paths. Continue to allow normal receipt updates in RECEIVING/reopened RECEIVING.
+**Цель:** после запечатывания блокировать изменения **идентичности и состава** контейнеров Shipment и всех Sample в манифесте, в том числе через случайные SQL-запросы. Обычные обновления приёмки в RECEIVING/повторно открытом RECEIVING остаются разрешены.
 
-Recommended trigger guards:
+Рекомендуемые проверки триггеров:
 
-1. On `transport_containers` INSERT/DELETE or UPDATE of `shipment_id/code`: derive parent Shipment and acquire `SELECT ... FOR UPDATE` on `shipments`; only permit parent `DRAFT`.
-2. On `container_items` INSERT/DELETE or UPDATE of `container_id/sample_id`: resolve parent Shipment, lock it first and require `DRAFT`.
-3. For UPDATE of **receipt-only fields**, allow only while parent Shipment is `RECEIVING`, with OPEN receiving session and the current actor authorized by the application. Note: a DB trigger without a reliable DB actor context cannot enforce user RBAC; application must enforce that separately.
-4. Updates to `samples.code/origin_organization_id` are forbidden after creation. Moving a Sample between containers is allowed only during `DRAFT` under the same Shipment lock.
-5. Locking must follow a consistent order. Application first locks parent Shipment; trigger then reuses/rechecks the parent lock. Direct SQL also blocks on it, preventing a `seal` race.
-6. For movement between different Shipments, a lock order based on sorted Shipment IDs is required if supported; alternatively **do not support direct cross-Shipment moves** in MVP.
-7. Runtime DB role cannot disable triggers; migration owner role is distinct. Test with a direct SQL mutation after seal: it must fail and leave records unchanged.
+1. При INSERT/DELETE `transport_containers` или UPDATE `shipment_id/code`: определить родительский Shipment и получить `SELECT ... FOR UPDATE` на `shipments`; разрешить только родительский `DRAFT`.
+2. При INSERT/DELETE `container_items` или UPDATE `container_id/sample_id`: определить родительский Shipment, сначала заблокировать его и потребовать `DRAFT`.
+3. При UPDATE **только полей приёмки** разрешать изменение лишь при родительском Shipment в `RECEIVING`, сеансе приёмки OPEN и текущем исполнителе, авторизованном приложением. Триггер без надёжного контекста исполнителя БД не обеспечивает пользовательский RBAC; приложение проверяет его отдельно.
+4. Изменения `samples.code/origin_organization_id` после создания запрещены. Перемещение Sample между контейнерами разрешено только в `DRAFT` под той же блокировкой Shipment.
+5. Порядок блокировок согласован. Приложение сначала блокирует родительский Shipment; триггер повторно использует/проверяет блокировку. Прямой SQL также ждёт её, предотвращая гонку с `seal`.
+6. Для перемещения между разными Shipment, если оно поддерживается, требуется порядок блокировки по отсортированным ID Shipment; альтернативно **не поддерживать прямые перемещения между Shipment** в MVP.
+7. Рабочая роль БД не может отключать триггеры; владелец миграций — отдельная роль. Проверить прямое изменение SQL после запечатывания: оно должно завершиться ошибкой, не меняя записи.
 
-**Important PostgreSQL correctness detail:** a BEFORE row-level trigger that reads a parent must acquire a lock before checking its status to avoid races with concurrent `seal`. A naive unprotected SELECT would not suffice. Trigger design should be reviewed with concurrent PostgreSQL integration tests.
+**Важная деталь корректности PostgreSQL:** построчный BEFORE-триггер, читающий родителя, должен получить блокировку до проверки статуса, чтобы исключить гонку с конкурентным `seal`. Простого незащищённого SELECT недостаточно. Проект триггера следует проверить конкурентными интеграционными тестами PostgreSQL.
 
-The manifest remains fixed after seal even if a lab manager reopens receiving.
+Манифест остаётся неизменным после запечатывания, даже если руководитель лаборатории повторно открыл приёмку.
 
-## 5. Transaction boundary and lock order
+## 5. Граница транзакции и порядок блокировок
 
-For **every** write use case (online and offline sync), use this order:
+Для **каждого** сценария записи (обычного и синхронизации действий без сети) соблюдать порядок:
 
-1. Authenticate actor and validate basic request.
-2. Open DB transaction and reserve/check idempotency key, if required.
-3. Lock Shipment `SELECT ... FOR UPDATE`.
-4. Check current role/scope and state; lock/update child rows in deterministic order.
-5. Append audit event, set updated aggregate `version`, save replayable response.
-6. Commit; then publish optional best-effort Celery notification.
+1. Аутентифицировать исполнителя и проверить базовый запрос.
+2. Открыть транзакцию БД и зарезервировать/проверить ключ идемпотентности, если требуется.
+3. Заблокировать Shipment через `SELECT ... FOR UPDATE`.
+4. Проверить текущую роль/область доступа и состояние; блокировать/обновлять дочерние строки в детерминированном порядке.
+5. Добавить событие аудита, обновить `version` агрегата, сохранить воспроизводимый ответ.
+6. Зафиксировать транзакцию; затем отправить необязательное уведомление Celery без гарантии доставки.
 
-Never create a code path that locks child objects then parent Shipment, or locks a Shipment before reserving its idempotency key. Concurrent use of the **same idempotency key** is serialized by the unique key; other keys serialize on Shipment. For commands touching distinct Shipments (e.g., unusual future reallocation), establish global lock ordering.
+Никогда не создавать путь, сначала блокирующий дочерние объекты, затем Shipment, либо блокирующий Shipment до резервирования ключа идемпотентности. Конкурентное использование **одного ключа идемпотентности** сериализуется уникальным ключом; разные ключи сериализуются на Shipment. Для команд нескольких Shipment (например, будущего необычного перераспределения) установить глобальный порядок блокировок.
 
-For permission changes during retries, re-check that the actor is currently active/authorized **before disclosing** any saved replay response. A cache hit must not resurrect revoked access.
+При изменении прав между повторами заново проверять текущую активность и полномочия исполнителя **до раскрытия** сохранённого ответа. Попадание в кэш не должно восстанавливать отозванный доступ.
 
-## 6. Migration sequence and indexes
+## 6. Последовательность миграций и индексы
 
-1. Add new role values and Shipment status CHECK; update application enum validation at the same deployment boundary.
-2. Create reason codes; seed stable codes for each scope+kind, with no PHI.
-3. Add receipt code/comment columns and receiving_sessions/receipt_revisions; backfill any existing data in staged migration if the database is not empty.
-4. Add container_issues and extend handoffs for privileged withdrawal and closure metadata.
-5. Add sample_external_references; update scoped queries.
-6. Add indexes on `container_issues(shipment_id,status)`, `receiving_sessions(shipment_id,sequence DESC)`, `receipt_revisions(container_item_id,changed_at)`, `sample_external_references(sample_id)`, and `issue_reason_codes(scope,kind,is_active)`.
-7. Create trigger functions and attach them with migrations; verify direct SQL and concurrent edit vs seal.
-8. Run Alembic upgrade + smoke checks on real PostgreSQL; test rollback/forward migration on disposable database before production.
+1. Добавить новые роли и CHECK статусов Shipment; обновить проверку перечислений приложения в рамках того же развёртывания.
+2. Создать коды причин; заполнить стабильными кодами каждой области и категории, без идентифицирующих медицинских данных.
+3. Добавить столбцы кода/комментария приёмки и receiving_sessions/receipt_revisions; при непустой БД заполнить существующие данные поэтапной миграцией.
+4. Добавить container_issues и расширить handoffs для отзыва с особыми полномочиями и метаданных закрытия.
+5. Добавить sample_external_references; обновить запросы с проверкой области доступа.
+6. Добавить индексы `container_issues(shipment_id,status)`, `receiving_sessions(shipment_id,sequence DESC)`, `receipt_revisions(container_item_id,changed_at)`, `sample_external_references(sample_id)`, `issue_reason_codes(scope,kind,is_active)`.
+7. Создать и подключить функции триггеров миграциями; проверить прямой SQL и конкурентное редактирование с запечатыванием.
+8. Выполнить Alembic upgrade и базовые проверки на настоящем PostgreSQL; проверить откат/прямую миграцию на одноразовой БД перед эксплуатацией.
 
-**Do not use the SQL blocks above as complete runnable migrations.** They are precise design requirements; actual migration scripts must define types, defaults, FK and privileges consistently.
+**Не использовать SQL-блоки выше как готовые исполняемые миграции.** Это точные проектные требования; реальные скрипты должны согласованно определить типы, значения по умолчанию, внешние ключи и права.
 
-## 7. High-priority tests
+## 7. Приоритетные тесты
 
-- Container MISSING and container REJECTED must not silently mark any sample RECEIVED/MISSING/REJECTED.
-- Blocking from IN_TRANSIT or DELIVERY_PENDING is atomic and closes pending delivery handoff if present.
-- Closing blocked Shipment yields CLOSED_UNDELIVERED and **never** counts as successful delivery.
-- RETRY_DELIVERY requires regional operations authorization, no OPEN issues, and a new Delivery attempt.
-- Only LAB_MANAGER can reopen; revisions/audit preserve the original receipt outcomes.
-- Concurrent reopening allows one OPEN session; concurrent receipt updates serialize on Shipment.
-- Direct SQL INSERT/UPDATE/DELETE on sealed manifest fails; receipt fields still editable only during RECEIVING under the guarded path.
-- Deactivated reason code cannot be chosen for new incidents, but historical records keep their code.
-- Unique constraint retains samples after cancelled Shipment: repeat assignment remains forbidden, by product decision.
-- Offline command replay with a different payload under same ID returns a conflict without double event.
+- MISSING и REJECTED контейнера не должны незаметно назначать ни одной пробирке RECEIVED/MISSING/REJECTED.
+- Блокировка из IN_TRANSIT или DELIVERY_PENDING атомарна и закрывает ожидающую передачу доставки, если она есть.
+- Закрытие заблокированного Shipment даёт CLOSED_UNDELIVERED и **никогда** не считается успешной доставкой.
+- RETRY_DELIVERY требует полномочий регионального оператора, отсутствия проблем OPEN и новой попытки доставки.
+- Только LAB_MANAGER может повторно открыть приёмку; версии изменений/аудит сохраняют исходные результаты.
+- Конкурентное повторное открытие допускает один сеанс OPEN; конкурентные обновления приёмки сериализуются на Shipment.
+- Прямой SQL INSERT/UPDATE/DELETE запечатанного манифеста завершается ошибкой; поля приёмки доступны для изменения только в RECEIVING через защищённый путь.
+- Деактивированный код причины нельзя выбрать для нового инцидента, но исторические записи сохраняют свой код.
+- Уникальное ограничение сохраняет пробирки после отмены Shipment: повторное назначение запрещено по продуктовому решению.
+- Повтор команды без сети с другими данными под тем же ID даёт конфликт без второго события.

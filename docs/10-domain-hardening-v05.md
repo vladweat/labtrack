@@ -1,50 +1,50 @@
-# LabTrack v0.5 — Decision Register & Domain Rules
+# LabTrack v0.5 — Реестр решений и доменные правила
 
-> **Исторический документ (до v0.6).** Здесь могут встречаться устаревшие правила передачи всей партии, одностороннего разрешения контейнерных проблем и old API paths. Актуальные и приоритетные требования: [Decisions v0.6](15-decisions-v06.md), [Domain v0.6](16-domain-workflows-v06.md), [Data Model v0.6](17-data-model-v06.md), [API v0.6](18-api-v06.md). Не использовать этот документ в одиночку как нормативный контракт.
+> **Исторический документ (до v0.6).** Здесь могут встречаться устаревшие правила передачи всей партии, одностороннего разрешения контейнерных проблем и устаревшие пути API. Актуальные и приоритетные требования: [Решения v0.6](15-decisions-v06.md), [Доменная модель v0.6](16-domain-workflows-v06.md), [Модель данных v0.6](17-data-model-v06.md), [API v0.6](18-api-v06.md). Не использовать этот документ в одиночку как нормативный контракт.
 
-**Status:** product decisions from the completed questionnaire + explicit architecture proposals.  
-**Precedence:** for v0.5, this document overrides contradictory statements in v0.1–v0.4. Machine-readable API and earlier docs must be updated to match before implementation.
+**Статус:** продуктовые решения по заполненному опроснику и явно сформулированные архитектурные предложения.
+**Приоритет:** для v0.5 этот документ заменяет противоречащие ему положения v0.1–v0.4. Машиночитаемый API и ранние документы необходимо привести в соответствие до реализации.
 
-## 1. Approved product choices (20/20)
+## 1. Утверждённые продуктовые решения (20/20)
 
-| ID | Decision |
+| ID | Решение |
 |---|---|
-| V05-01 | One central receiving laboratory in the pilot region; each Shipment has one sender and that configured destination |
-| V05-02 | Sender Operator assigns the Courier; replacement only in DRAFT |
-| V05-03 | Organizations and initial users are created by bootstrap CLI; Org Admin manages membership/roles |
-| V05-04 | REJECTED can refer to an individual Sample **or** an entire TransportContainer |
-| V05-05 | If a container is missing, do not confirm Delivery; route to manual resolution |
-| V05-06 | Stuck pending handoffs are notified/escalated to a responsible human, never auto-confirmed |
-| V05-07 | Cancelling a Shipment does not release its Sample allocations; repeat shipping is out of scope |
-| V05-08 | Lab Operator may correct a Sample receipt before finalization; each correction has a recorded audit event |
-| V05-09 | Lab Manager may reopen completed receiving with a reason and audit |
-| V05-10 | MISSING/REJECTED requires a structured reason code; free-text comment is optional |
-| V05-11 | Sample receiving can use QR or manual manifest selection; every item receives an explicit outcome |
-| V05-12 | Samples may hold opaque references to external LIS objects; no patient data or actual LIS integration |
-| V05-13 | Local auth uses Argon2id and short-lived JWT |
-| V05-14 | Demo audit is not automatically deleted; real retention policy remains a separate production decision |
-| V05-15 | DB triggers protect the sealed manifest in addition to service-level checks |
-| V05-16 | Sender manually sets expected_delivery_at |
-| V05-17 | Celery/Redis notifications are best-effort, never the source of truth |
-| V05-18 | Courier supports an offline command queue with later synchronization |
-| V05-19 | Target is a production-like MVP with tests, CI and observability, using synthetic data |
+| V05-01 | Одна центральная принимающая лаборатория в пилотном регионе; у каждой партии один отправитель и этот настроенный получатель |
+| V05-02 | Оператор отправителя назначает курьера; замена возможна только в DRAFT |
+| V05-03 | Организации и начальные пользователи создаются через CLI начальной настройки; администратор организации управляет членством и ролями |
+| V05-04 | REJECTED может относиться к отдельному Sample **или** целому TransportContainer |
+| V05-05 | Если контейнер отсутствует, не подтверждать доставку; передать на ручное разрешение |
+| V05-06 | О зависших ожидающих передачах уведомляют ответственного сотрудника или передают ему вопрос; автоматическое подтверждение запрещено |
+| V05-07 | Отмена Shipment не освобождает привязанные Sample; повторная отправка за рамками продукта |
+| V05-08 | Оператор лаборатории может исправить результат приёмки Sample до завершения; каждое исправление сопровождается событием аудита |
+| V05-09 | Руководитель лаборатории может повторно открыть завершённую приёмку с причиной и аудитом |
+| V05-10 | MISSING/REJECTED требует структурированного кода причины; свободный комментарий необязателен |
+| V05-11 | При приёмке Sample допустимы QR или ручной выбор из манифеста; каждая позиция получает явный результат |
+| V05-12 | Образцы могут содержать непрозрачные ссылки на внешние объекты ЛИС; данные пациентов и реальная интеграция с ЛИС отсутствуют |
+| V05-13 | Локальная аутентификация использует Argon2id и короткоживущий JWT |
+| V05-14 | Демонстрационный аудит не удаляется автоматически; реальная политика хранения остаётся отдельным эксплуатационным решением |
+| V05-15 | Триггеры БД защищают запечатанный манифест в дополнение к проверкам сервиса |
+| V05-16 | Отправитель вручную задаёт expected_delivery_at |
+| V05-17 | Уведомления Celery/Redis доставляются без гарантий и никогда не служат источником истины |
+| V05-18 | Курьер поддерживает очередь команд без сети с последующей синхронизацией |
+| V05-19 | Цель — MVP, приближенный к эксплуатации, с тестами, CI и наблюдаемостью, на синтетических данных |
 
-Count: V05-01–V05-19 contain 20 answers because V05-02 covers both courier assignment and replacement. Decisions retained from previous iterations: each tube tracked separately inside a container, two-party handoffs, and only the two discrepancy categories MISSING/REJECTED.
+Подсчёт: V05-01–V05-19 содержат 20 ответов, поскольку V05-02 охватывает назначение и замену курьера. Сохранены решения предыдущих итераций: отдельное отслеживание каждой пробирки внутри контейнера, двусторонние передачи и только две категории расхождений MISSING/REJECTED.
 
-## 2. Conceptual separation of problem kind and target
+## 2. Разделение категории проблемы и её объекта
 
-A *discrepancy kind* is MISSING or REJECTED. A *target* is SAMPLE or CONTAINER.
+*Категория расхождения* — MISSING или REJECTED. *Объект* — SAMPLE или CONTAINER.
 
-| Target | MISSING | REJECTED |
+| Объект | MISSING | REJECTED |
 |---|---|---|
-| Sample | Sample expected in manifest but not found during receiving | Sample presented but refused by laboratory |
-| Container | Container expected at delivery but not presented | Container presented but refused by destination laboratory |
+| Пробирка | Ожидается по манифесту, но не найдена при приёмке | Предъявлена, но лаборатория отказала в приёмке |
+| Контейнер | Ожидается при доставке, но не предъявлен | Предъявлен, но лаборатория назначения отказала в приёмке |
 
-**v0.5 design choice:** use `container_issues` as the authoritative store for CONTAINER problems, while existing `container_items.receipt_result` remains authoritative for SAMPLE problems. **Do not duplicate sample outcomes in a generic issues table**. Reason codes are shared across levels. Analytics may combine both sources by querying them.
+**Проектное решение v0.5:** `container_issues` — достоверное хранилище проблем CONTAINER, а существующее `container_items.receipt_result` сохраняет эту роль для проблем SAMPLE. **Не дублировать результаты пробирок в универсальной таблице проблем**. Коды причин общие для обоих уровней. Аналитика может объединять оба источника запросами.
 
-A container issue **never** automatically changes results of its child samples. Full container acceptance does not occur while it has an unresolved delivery issue. There is no partial handoff of the other containers in MVP.
+Проблема контейнера **никогда** автоматически не меняет результаты дочерних пробирок. Полная приёмка контейнера невозможна при неразрешённой проблеме доставки. Частичная передача остальных контейнеров в MVP отсутствует.
 
-## 3. Shipment state machine (proposed v0.5 extension)
+## 3. Автомат состояний партии (предлагаемое расширение v0.5)
 
 ```mermaid
 stateDiagram-v2
@@ -68,63 +68,63 @@ stateDiagram-v2
     COMPLETED_WITH_ISSUES --> RECEIVING: lab manager reopen
 ```
 
-`DELIVERY_BLOCKED` and `CLOSED_UNDELIVERED` are **Shipment workflow states**, not new discrepancy types.
+`DELIVERY_BLOCKED` и `CLOSED_UNDELIVERED` — **состояния процесса Shipment**, а не новые категории расхождений.
 
-**Rules for a blocked delivery:**
+**Правила заблокированной доставки:**
 
-1. Only a scoped Courier or destination Lab Operator can report an actual delivery discrepancy for a container in the sealed manifest. Missing container can be reported by either party; container REJECTED requires destination Lab Operator.
-2. A report from IN_TRANSIT or DELIVERY_PENDING opens a `container_issue` and changes the Shipment to DELIVERY_BLOCKED atomically.
-3. If a DELIVERY handoff is PENDING, it becomes WITHDRAWN with an audit entry; the prior initiator and both timestamps remain in the history.
-4. The container and all child items remain part of the original sealed manifest. No `ACCEPTED`, `MISSING` or `REJECTED` outcomes are assigned automatically to samples.
-5. A scoped `REGIONAL_OPERATIONS` user explicitly resolves a blocked delivery, with a reason and one of:
-   - `RETRY_DELIVERY`: mark the issue resolved for retry; transition to IN_TRANSIT; a new delivery handoff attempt is required.
-   - `CLOSE_UNDELIVERED`: close the issue as undelivered and Shipment as CLOSED_UNDELIVERED; no receiving session is created.
-6. Completion of any issue resolution and resulting state is a single transaction, logged with actor and reason. A shipment cannot have unaccounted-for OPEN container issues at retry or closure.
+1. Только курьер с подходящей областью доступа или оператор лаборатории назначения может сообщить о фактическом расхождении при доставке контейнера из запечатанного манифеста. Об отсутствии может сообщить любая сторона; для REJECTED требуется оператор лаборатории назначения.
+2. Сообщение из IN_TRANSIT или DELIVERY_PENDING атомарно открывает `container_issue` и переводит Shipment в DELIVERY_BLOCKED.
+3. Если передача DELIVERY имеет статус PENDING, он меняется на WITHDRAWN с записью аудита; прежний инициатор и обе временные метки сохраняются в истории.
+4. Контейнер и все дочерние позиции остаются частью исходного запечатанного манифеста. Результаты `ACCEPTED`, `MISSING` и `REJECTED` не назначаются пробиркам автоматически.
+5. Пользователь `REGIONAL_OPERATIONS` с подходящей областью доступа явно разрешает блокировку с причиной и одним из исходов:
+   - `RETRY_DELIVERY`: отметить проблему разрешённой для повторной попытки; перейти в IN_TRANSIT; требуется новая попытка передачи при доставке.
+   - `CLOSE_UNDELIVERED`: закрыть проблему как недоставку, а Shipment — как CLOSED_UNDELIVERED; сеанс приёмки не создаётся.
+6. Разрешение проблемы и итоговое состояние фиксируются одной транзакцией, с исполнителем и причиной в журнале. При повторной попытке или закрытии у партии не должно оставаться неучтённых проблем контейнеров OPEN.
 
-**Physical custody assumption — not approved by questionnaire:** while delivery is blocked, the courier remains responsible for the containers until a separate approved handoff or manual closure. Do not claim this proves where the container physically is. Legal/operational policy must be agreed before real-world use.
+**Предположение о физической ответственности — не утверждено опросником:** пока доставка заблокирована, курьер отвечает за контейнеры до отдельной утверждённой передачи или ручного закрытия. Это не доказывает физическое местоположение контейнера. Правовые и операционные правила необходимо согласовать до реального использования.
 
-## 4. Receiving and reopening
+## 4. Приёмка и повторное открытие
 
-- LAB_OPERATOR or LAB_MANAGER at destination records per-item result during RECEIVING; `ACCEPTED` has no reason code; `MISSING` / `REJECTED` require a reason code valid for `scope=SAMPLE` and corresponding kind.
-- A laboratory may correct an item prior to completion, **writing a receipt revision and append-only audit event**.
-- When Lab first confirms Delivery, create `receiving_session(sequence=1,status=OPEN)`. On completion close that session and derive Shipment status from latest per-sample outcomes.
-- `LAB_MANAGER` can reopen a Shipment only from COMPLETED or COMPLETED_WITH_ISSUES. Require a nonempty reason and create a **new receiving session**, preserving all prior sessions/revisions/audit. Shipment returns to RECEIVING. No modification to the sealed manifest.
-- On reopening, previously recorded sample outcomes remain the **current** values, not automatically reset; operator may revise selected items. On the next completion, re-check all items and re-derive status. Only one OPEN receiving session per Shipment is allowed.
-- No reopening of CLOSED_UNDELIVERED in MVP. A lab manager cannot override missing container custody.
+- LAB_OPERATOR или LAB_MANAGER лаборатории назначения фиксирует результат каждой позиции в RECEIVING; у `ACCEPTED` нет кода причины; `MISSING` / `REJECTED` требуют кода, допустимого для `scope=SAMPLE` и соответствующей категории.
+- Лаборатория может исправить позицию до завершения, **создав версию результата приёмки и неизменяемое событие аудита**.
+- При первом подтверждении доставки лабораторией создать `receiving_session(sequence=1,status=OPEN)`. При завершении закрыть сеанс и вывести статус Shipment из последних результатов пробирок.
+- `LAB_MANAGER` может повторно открыть Shipment только из COMPLETED или COMPLETED_WITH_ISSUES. Требуются непустая причина и **новый сеанс приёмки** с сохранением всех прежних сеансов, версий изменений и аудита. Shipment возвращается в RECEIVING. Запечатанный манифест не меняется.
+- При повторном открытии прежние результаты пробирок остаются **текущими**, без автоматического сброса; оператор может исправить выбранные позиции. При следующем завершении заново проверить все позиции и вычислить статус. Допустим только один сеанс OPEN на Shipment.
+- Повторное открытие CLOSED_UNDELIVERED в MVP отсутствует. Руководитель лаборатории не может переопределить ответственность за отсутствующий контейнер.
 
-## 5. Two-party handoffs and offline
+## 5. Двусторонние передачи и работа без сети
 
-Pickup: Sender confirms release online, then Courier confirms receipt. Delivery: Courier confirms delivery, then Lab confirms container receipt. Separate actors and verified roles required, even when offline actions are synchronized.
+Забор: отправитель подтверждает выдачу через сеть, затем курьер подтверждает получение. Доставка: курьер подтверждает доставку, затем лаборатория подтверждает получение контейнеров. Требуются разные исполнители и проверенные роли, в том числе при синхронизации действий без сети.
 
-**Offline actions are client drafts, not server-confirmed custody events.** Until sync succeeds, show `PENDING_SYNC` locally; server Shipment status is unchanged. Sync must check current actor, current role, manifest, state, duplicates and submitted container set. Device timestamps are untrusted metadata; server timestamp is the authoritative recorded confirmation time.
+**Действия без сети — клиентские черновики, а не подтверждённые сервером события ответственности.** До успешной синхронизации локально показывается `PENDING_SYNC`; серверный статус Shipment не меняется. При синхронизации проверяются текущий исполнитель, роль, манифест, состояние, дубли и переданный набор контейнеров. Временные метки устройства — недоверенные метаданные; серверная метка — достоверное время регистрации подтверждения.
 
-Manual escalation of overdue or stuck handoffs is P0, but it may only request human review, not silently finalize transfers. Notifications remain best effort; stale cases must also be queryable through the Dashboard even if all notifications fail.
+Ручная передача просроченных или зависших передач ответственному сотруднику относится к P0, но может лишь запросить проверку человеком и не должна незаметно завершать передачи. Уведомления не гарантированы; устаревшие случаи должны находиться через панель показателей, даже если все уведомления потеряны.
 
-See [Offline Sync Protocol](11-offline-sync-protocol.md).
+См. [Протокол синхронизации действий без сети](11-offline-sync-protocol.md).
 
-## 6. Roles and scope
+## 6. Роли и области доступа
 
-- `SENDER_OPERATOR`: create tubes, containers, shipment, assign Courier in DRAFT, seal, initiate Pickup, cancel before Pickup starts.
-- `COURIER`: only assigned shipments; confirm Pickup, initiate Delivery, report missing container, sync authorized offline commands.
-- `LAB_OPERATOR`: destination lab confirms receipt of containers, records and corrects sample outcomes, reports container MISSING/REJECTED.
-- `LAB_MANAGER`: destination lab supervisory role; also can reopen completed receiving, with audit.
-- `ORG_ADMIN`: membership management within own organization, not an implicit medical-operational override.
-- `REGIONAL_OPERATIONS`: region-scoped manual resolution of blocked deliveries and escalation review; no general authority to edit individual sample results or users.
-- `REGIONAL_ANALYST`: region-scoped aggregate read only, no row-level sample data.
+- `SENDER_OPERATOR`: создаёт пробирки, контейнеры и партию, назначает курьера в DRAFT, запечатывает, начинает забор, отменяет до начала забора.
+- `COURIER`: только назначенные партии; подтверждает забор, начинает доставку, сообщает об отсутствии контейнера, синхронизирует разрешённые команды без сети.
+- `LAB_OPERATOR`: лаборатория назначения подтверждает получение контейнеров, фиксирует и исправляет результаты пробирок, сообщает о MISSING/REJECTED контейнеров.
+- `LAB_MANAGER`: руководящая роль лаборатории назначения; дополнительно повторно открывает завершённую приёмку с аудитом.
+- `ORG_ADMIN`: управляет членством в своей организации; не получает неявного права обходить медицинские и операционные правила.
+- `REGIONAL_OPERATIONS`: вручную разрешает блокировки и рассматривает переданные вопросы в своём регионе; не имеет общих полномочий редактировать результаты отдельных пробирок или пользователей.
+- `REGIONAL_ANALYST`: только чтение региональных агрегатов, без построчных данных пробирок.
 
-Bootstrap creates all necessary starter accounts and region/org records; no public user-registration API.
+Начальная настройка создаёт все необходимые исходные учётные записи и записи регионов/организаций; публичного API регистрации пользователей нет.
 
-## 7. Still open: do not silently promote defaults to approved requirements
+## 7. Открытые вопросы: не превращать предложения по умолчанию в утверждённые требования
 
-| Item | Working proposal | Needs confirmation |
+| Вопрос | Рабочее предложение | Требует подтверждения |
 |---|---|---|
-| Actual physical custody of rejected container | Remains with Courier pending approved handoff/manual closure | Yes, operational specialists |
-| Who specifically may handle escalation | Region-scoped REGIONAL_OPERATIONS | Role confirmed by product owner |
-| Duration of locally queued offline actions | 24-hour suggested threshold for manual review, not automatic acceptance/expiry | Yes |
-| Reopening window | No automatic deadline in synthetic MVP; LAB_MANAGER with reason | Yes |
-| Reason code catalog | Seed stable technical codes grouped by SAMPLE/CONTAINER, MISSING/REJECTED | Actual code names |
-| External LIS reference cardinality | `Sample 1:N external_reference` to avoid assuming one analysis per tube | Yes |
-| Timestamp for physical handoff | `client_performed_at` is untrusted, `recorded_at` is server DB clock | Actual legal semantics |
-| Entire container missing while in transit | Report and block delivery rather than falsely mark all samples MISSING | Yes, aligned with no partial handoff |
+| Фактическая ответственность за отклонённый контейнер | Остаётся у курьера до утверждённой передачи/ручного закрытия | Да, операционными специалистами |
+| Кто именно рассматривает переданные вопросы | REGIONAL_OPERATIONS своего региона | Роль подтверждена владельцем продукта |
+| Длительность хранения локальных команд без сети | Предлагаемый порог ручной проверки — 24 часа, без автоматического принятия или истечения срока | Да |
+| Период повторного открытия | Без автоматического срока в синтетическом MVP; LAB_MANAGER с причиной | Да |
+| Справочник кодов причин | Начальное заполнение стабильными техническими кодами по SAMPLE/CONTAINER, MISSING/REJECTED | Конкретные имена кодов |
+| Кратность внешних ссылок ЛИС | `Sample 1:N external_reference`, чтобы не предполагать один анализ на пробирку | Да |
+| Время физической передачи | `client_performed_at` недоверенное, `recorded_at` — часы серверной БД | Фактический правовой смысл |
+| Весь контейнер пропал в пути | Сообщить и заблокировать доставку, не помечать ложно все пробирки MISSING | Да, согласуется с отсутствием частичной передачи |
 
-In this documentation, **accepted choices** and **proposed implementation defaults** are deliberately distinct. This prevents ambiguous operational decisions from becoming implicit DB constraints.
+В документации явно различаются **утверждённые решения** и **предлагаемые параметры реализации по умолчанию**. Это не позволяет неоднозначным операционным решениям стать неявными ограничениями БД.
