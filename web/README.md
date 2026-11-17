@@ -1,57 +1,33 @@
-# LabTrack web app
+# Веб-приложение LabTrack
 
-This React, TypeScript, and Vite app provides role-specific Sender, Courier,
-Lab, Lab Manager, and Operations workspaces. Courier offline Pickup/Delivery
-commands remain local proposals until accepted by the API; the server is the
-custody authority.
+Приложение на React, TypeScript и Vite предоставляет рабочие области отправителя, курьера, оператора и руководителя лаборатории, а также регионального оператора. Команды забора и доставки, созданные курьером без сети, остаются локальными предложениями до принятия API. Состояние передачи определяет сервер.
 
-## Local development
+## Локальная разработка
 
-Use Node 22.13 or newer within Node 22 and npm 10. From `web/`:
+Используйте Node 22.13 или новее в пределах ветки 22 и npm 10. Из `web/`:
 
 ```sh
 npm ci
 npm run dev
 ```
 
-The Vite server proxies `/api/v1` to `http://127.0.0.1:8000`. Start the FastAPI
-service from `backend/` using the instructions in [backend/README.md](../backend/README.md).
-Set `API_PROXY_TARGET` if the API is listening elsewhere. `VITE_API_BASE` can
-override the browser API prefix; it defaults to `/api/v1`.
+Сервер Vite передаёт запросы `/api/v1` на `http://127.0.0.1:8000`. Запустите FastAPI из `backend/` по [инструкции серверной части](../backend/README.md). Если API слушает другой адрес, задайте `API_PROXY_TARGET`. `VITE_API_BASE` переопределяет префикс API в браузере; по умолчанию это `/api/v1`.
 
-## Checks
+## Проверки
 
 ```sh
 npx playwright install chromium
 npm run check
 ```
 
-`check` runs ESLint, the IndexedDB acknowledgement-order unit tests, a
-TypeScript-checked production build, and Chromium browser tests against the
-built app. Browser tests mock the API and verify offline behavior, replay,
-account scoping, and service-worker cache boundaries.
+`check` запускает ESLint, модульные тесты порядка подтверждений IndexedDB, сборку для развёртывания с проверкой типов TypeScript и браузерные тесты Chromium для собранного приложения. Браузерные тесты подменяют API и проверяют работу без сети, повтор команд, разделение данных учётных записей и границы кеша сервис-воркера.
 
-The local Sender→Courier→Lab browser/API acceptance is separate from the
-default mocked suite. From `web/`, run `npm run test:acceptance:local` after
-starting the disposable local setup described in the [development guide](../docs/development.md).
+Приёмочный сценарий отправитель → курьер → лаборатория с реальными браузером и API запускается отдельно от стандартного набора с подменённым API. Из `web/` выполните `npm run test:acceptance:local`, подготовив одноразовое локальное окружение по [руководству разработки](../docs/development.md).
 
-## Local data and synthetic-data boundary
+## Локальное хранение и граница синтетических данных
 
-The access token stays in memory and is not restored after a reload. Sign in
-again to access the same account's IndexedDB queue. Snapshots, immutable
-commands, local command states, and sync outcomes are scoped to the authenticated
-user and this browser installation. Logging out or switching accounts warns
-before deleting that user's saved device data. A separate browser installation
-has a separate queue.
+Токен доступа хранится в памяти и не восстанавливается после перезагрузки. Для доступа к очереди той же учётной записи в IndexedDB войдите снова. Снимки, неизменяемые команды, их локальные состояния и результаты синхронизации привязаны к аутентифицированному пользователю и этому экземпляру браузера. При выходе или смене учётной записи приложение предупреждает перед удалением сохранённых данных пользователя с устройства. В другом экземпляре браузера очередь отдельная.
 
-The generated service worker precaches static shell assets only. API traffic
-uses `cache: "no-store"` and has no service-worker runtime cache. The application
-stores Sample records with material type, collection time, and opaque external
-references, but no patient identity fields. External references may still
-identify people, so use synthetic data only. The build in `dist/` is static
-output.
+Сгенерированный сервис-воркер предварительно кеширует только статические ресурсы оболочки. Запросы API используют `cache: "no-store"`; сервис-воркер их не кеширует. Приложение хранит записи образцов с типом материала, временем забора и непрозрачными внешними ссылками, но без полей личности пациента. Внешние ссылки всё же могут идентифицировать человека: используйте только синтетические данные. Сборка в `dist/` содержит статические файлы.
 
-For a reproducible walkthrough, use the isolated local synthetic sandbox in the
-[demo guide](../docs/deploy.md). Its seed command targets only an explicitly
-enabled demo database and local LabTrack API. Do not assume a shared public demo
-URL or use shared demo data for a walkthrough.
+Для воспроизводимой демонстрации используйте изолированное локальное синтетическое окружение из [руководства демонстрации](../docs/deploy.md). Команда заполнения работает только с явно разрешённой демонстрационной БД и локальным API LabTrack. Не предполагайте наличие общего публичного адреса демонстрации и не используйте общие демонстрационные данные для показа.

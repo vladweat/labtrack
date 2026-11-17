@@ -1,100 +1,100 @@
-# LabTrack v0.6.1 — Offline Integrity, Snapshot Age and Idempotency
+# LabTrack v0.6.1 — Целостность автономных операций, возраст снимка и идемпотентность
 
-**Requirements status: APPROVED (2026-11-02).** Q07–Q11 and final OPEN-04 are recorded in the [Decision Register](20-decisions-v061.md). The Courier offline snapshot and sync flow is implemented; this document remains the normative integrity specification. Preserve v0.6 per-container delivery. The server is authoritative, not device time. See [offline sync](offline-sync.md) for a current implementation summary.
+**Статус требований: ОДОБРЕНЫ (2026-11-02).** Q07–Q11 и окончательный OPEN-04 записаны в [Реестре решений](20-decisions-v061.md). Автономные снимки и синхронизация курьера реализованы; документ остаётся нормативной спецификацией целостности. Сохраняется доставка по контейнерам v0.6. Авторитетен сервер, а не время устройства. Актуальное описание реализации — в [автономной синхронизации](offline-sync.md).
 
-## 1. Client commands unchanged in meaning
+## 1. Смысл клиентских команд не меняется
 
-Only Courier can create offline proposals:
-- COURIER_CONFIRM_PICKUP: **whole Shipment**, full sealed container set, confirms second party of pending Sender Pickup.
-- COURIER_INITIATE_CONTAINER_DELIVERY: **one container**, creates pending Delivery to be separately confirmed by Lab online.
+Только курьер может создавать автономные предложения:
+- COURIER_CONFIRM_PICKUP: **вся отправка**, полный зафиксированный набор контейнеров, подтверждение второй стороны ожидающего получения от отправителя.
+- COURIER_INITIATE_CONTAINER_DELIVERY: **один контейнер**, создаёт ожидающую доставку для отдельного подтверждения лабораторией с подключением.
 
-Neither command is a valid completed handoff until a PostgreSQL commit. Local `PENDING_SYNC` is not custody transfer. Two Courier devices may keep separate queues; do not merge them client-side or infer global ordering.
+Ни одна команда не является действительной завершённой передачей до фиксации PostgreSQL. Локальный `PENDING_SYNC` не означает передачу ответственности. Два устройства курьера могут вести отдельные очереди; не объединять их на клиенте и не выводить из них глобальный порядок.
 
-## 2. Server-issued manifest snapshots (Q07)
+## 2. Снимки манифеста, выданные сервером (Q07)
 
-On authorized GET `/courier/shipments/{shipment_id}/offline-manifest`, persist an immutable server-issued snapshot containing:
-- `snapshot_id UUID`, `actor_user_id`, current `assigned_courier_user_id`, `shipment_id`, and `region_id`;
-- `manifest_revision`, `pickup_state_version`, and the exact sealed container IDs, codes, delivery statuses, and `state_version` values;
-- `issued_at TIMESTAMPTZ` from the database and `policy_version`.
+При авторизованном GET `/courier/shipments/{shipment_id}/offline-manifest` сохранять неизменный снимок, выданный сервером, содержащий:
+- `snapshot_id UUID`, `actor_user_id`, текущий `assigned_courier_user_id`, `shipment_id` и `region_id`;
+- `manifest_revision`, `pickup_state_version` и точные ID, коды, статусы доставки и значения `state_version` зафиксированных контейнеров;
+- `issued_at TIMESTAMPTZ` из БД и `policy_version`.
 
-The snapshot and local/API payload are PHI-free. The global `Shipment.version` is not a sole offline freshness token.
+Снимок и локальное содержимое/содержимое API не содержат защищаемой медицинской информации. Глобальный `Shipment.version` не является единственным признаком актуальности автономной работы.
 
-Client commands include immutable `snapshot_id`, `client_command_id`, target, expected manifest and target state versions, and untrusted `client_performed_at`. Client local `queued_at` helps display age but is not trusted as proof.
+Клиентские команды включают неизменные `snapshot_id`, `client_command_id`, цель, ожидаемые версии манифеста и целевого состояния, а также недоверенное `client_performed_at`. Локальное клиентское `queued_at` помогает показывать возраст, но не считается доказательством.
 
-**Conservative engineering policy, not forensic fact:** if snapshot issued more than 24 hours before sync, mark command REVIEW_REQUIRED and do **not** mutate custody. A newer snapshot does not silently refresh an old queued command; re-create a fresh online action only after review. Snapshot issued 25h ago does not prove that user clicked 25h ago. Time from device can never supply the authoritative custody event timestamp.
+**Консервативное инженерное правило, а не криминалистический факт:** если снимок выдан более чем за 24 часа до синхронизации, пометить команду REVIEW_REQUIRED и **не** менять ответственность. Новый снимок не обновляет незаметно старую команду очереди; создавать новое действие с подключением только после рассмотрения. Снимок, выданный 25 часов назад, не доказывает, что пользователь нажал кнопку 25 часов назад. Время устройства никогда не может задавать авторитетное время события ответственности.
 
-A server cannot alert on an offline command it has never received. Local client warning after ~24h is UI guidance only; server Dashboard separately detects overdue persisted handoffs.
+Сервер не может оповещать об автономной команде, которую никогда не получал. Локальное предупреждение клиента спустя примерно 24 часа — только подсказка интерфейса; серверная панель отдельно обнаруживает просроченные сохранённые передачи.
 
-## 3. FINAL: relevant state conflict (OPEN-04 approved)
+## 3. ОКОНЧАТЕЛЬНО: конфликт значимого состояния (OPEN-04 одобрен)
 
-**Approved invariant:** a command is rejected with `OFFLINE_COMMAND_STALE` if **any of its relevant dependencies** changed after the authoritative snapshot, even if the status later returns to the original enum (ABA). No automatic rebasing. A change to unrelated data is not inherently a conflict.
+**Одобренный инвариант:** команда отклоняется с `OFFLINE_COMMAND_STALE`, если **любая её значимая зависимость** изменилась после авторитетного снимка, даже если статус затем вернулся к исходному значению перечисления (ABA). Автоматического перебазирования нет. Изменение несвязанных данных само по себе не конфликт.
 
-**Pickup command dependencies** (whole Shipment):
-- Immutable `manifest_revision` and exact sealed container set;
-- Pickup Handoff/Shipment **Pickup custody-phase version** (including new attempts and withdrawals);
-- assigned Courier identity and active current actor authorization;
-- Shipment phase still authorizes the second Sender→Courier confirmation, with the actual Sender release pending.
+**Зависимости команды получения курьером** (вся отправка):
+- Неизменный `manifest_revision` и точный зафиксированный набор контейнеров;
+- **Версия этапа ответственности при получении** передачи/отправки (включая новые попытки и отзывы);
+- Личность назначенного курьера и активная текущая авторизация участника;
+- Этап отправки по-прежнему допускает второе подтверждение отправитель→курьер с реально ожидающей выдачей отправителя.
 
-**Single-container Delivery initiation dependencies**:
-- immutable `manifest_revision`;
-- target Container `state_version` and its Delivery Handoff attempt/version;
-- whole-Shipment Pickup already CONFIRMED; Pickup custody-phase validity/current Courier assignment;
-- current authorized actor/scope and target Container status IN_TRANSIT.
+**Зависимости инициирования доставки отдельного контейнера**:
+- Неизменный `manifest_revision`;
+- `state_version` целевого контейнера и попытка/версия его передачи доставки;
+- Получение всей отправки уже CONFIRMED; действительность этапа ответственности при получении / текущее назначение курьера;
+- Текущие авторизованные участник/область и статус целевого контейнера IN_TRANSIT.
 
-### Same-snapshot Pickup followed by Delivery
+### Получение и последующая доставка по одному снимку
 
-E2E-06 permits a Courier to queue Pickup and then a one-container Delivery from the same snapshot. Since Pickup changes versions that Delivery must validate, the Delivery may carry `depends_on_command_id` naming its Pickup predecessor. The server accepts this exception only for an APPLIED Pickup by the same actor for the same Shipment and snapshot, and only when live Pickup/target versions exactly equal the predecessor's recorded post-state. This is an explicit causal link, not general rebasing. A missing predecessor is RETRYABLE and unrecorded; a rejected, foreign, wrong-snapshot, wrong-Shipment, or self predecessor is rejected. Any further relevant state change remains stale.
+E2E-06 разрешает курьеру поставить в очередь получение и затем доставку одного контейнера по одному снимку. Поскольку получение меняет версии, которые должна проверить доставка, доставка может содержать `depends_on_command_id`, указывающий на предшествующее получение. Сервер принимает это исключение только для получения APPLIED тем же участником, той же отправки и снимка, и только когда действующие версии получения/цели точно равны записанному состоянию после предшествующей команды. Это явная причинная связь, а не общее перебазирование. Отсутствующий предшественник даёт RETRYABLE и не записывается; отклонённый, чужой, с другим снимком/отправкой или ссылающийся на себя предшественник отклоняется. Любое дальнейшее значимое изменение состояния остаётся устареванием.
 
-**Not a conflict on its own:** a Sample classification or receipt revision in a different already-RECEIVED Container, an unrelated notification, analytics recomputation, or another unrelated Shipment bookkeeping version increment **provided all relevant tokens are unchanged**. Do not compare global `Shipment.version` alone and wrongly reject an independent container delivery.
+**Само по себе не конфликт:** классификация образца или версия приёмки в другом уже RECEIVED контейнере, несвязанное уведомление, пересчёт аналитики или другое несвязанное увеличение служебной версии отправки, **если все значимые признаки неизменны**. Не сравнивать один глобальный `Shipment.version`, ошибочно отклоняя независимую доставку контейнера.
 
-All relevant version checks occur under parent Shipment `FOR UPDATE`; the server computes a normalized dependency set and rejects on mismatch. A target transition `IN_TRANSIT → DELIVERY_PENDING → IN_TRANSIT` increments `state_version` and is stale despite returning to the same state label. Unauthorized actor remains rejected even if all version tokens match.
+Все проверки значимых версий выполняются под `FOR UPDATE` родительской отправки; сервер вычисляет нормализованный набор зависимостей и отклоняет несовпадения. Переход цели `IN_TRANSIT → DELIVERY_PENDING → IN_TRANSIT` увеличивает `state_version` и считается устаревшим, несмотря на возврат к тому же названию состояния. Неавторизованный участник отклоняется даже при совпадении всех признаков версий.
 
-## 4. 90-day replay + tombstone (Q08)
+## 4. Воспроизведение 90 дней и запись запрета повторного применения (Q08)
 
-All Courier offline actions share one immutable key namespace `(actor_id, operation='courier_offline_command', client_command_id)`. Hash canonicalized full original command, including snapshot_id, Shipment/Container/action, codes, expected versions, claimed time; prevent same UUID for a different payload.
+Все автономные действия курьера используют одно неизменное пространство ключей `(actor_id, operation='courier_offline_command', client_command_id)`. Хешировать канонизированную полную исходную команду, включая snapshot_id, отправку/контейнер/действие, коды, ожидаемые версии, заявленное время; запрещать тот же UUID для другого содержимого.
 
-- For at least **90 days** after a persisted terminal outcome, keep the detailed response and authoritative `recorded_at` for exact replay.
-- After detailed response retention ends, keep a compact **immutable terminal-command tombstone** with actor/command ID/request hash, audit/event reference, original outcome, authoritative `recorded_at` and minimal replay result; no duplicate application at any point. The actual tombstone retention policy must account for replay protection and production privacy requirements.
-- Same ID + same body → ALREADY_APPLIED and original (or post-90d minimal) authoritative outcome; same ID + different payload → IDEMPOTENCY_KEY_REUSED; neither mutates custody.
-- If crash after transaction commit before HTTP response, replay consults persisted response/tombstone. Store transaction result/audit/command ID atomically.
-- Ordinary REST `Idempotency-Key` can use separately configured retention; **never reuse short HTTP TTL as Courier custody replay horizon**.
-- If command had a definite REJECTED outcome rather than APPLIED, retain command identity/rejection history appropriately so replay of same ID never bypasses policy by being reinterpreted later.
+- Не менее **90 дней** после сохранённого окончательного исхода хранить подробный ответ и авторитетное `recorded_at` для точного воспроизведения.
+- После окончания хранения подробного ответа сохранять компактную **неизменную запись запрета повторного применения окончательной команды** с участником/ID команды/хешем запроса, ссылкой на аудит/событие, исходным результатом, авторитетным `recorded_at` и минимальным результатом воспроизведения; повторное применение недопустимо в любой момент. Реальные правила хранения такой записи должны учитывать защиту от повторов и требования конфиденциальности эксплуатации.
+- Тот же ID и тело → ALREADY_APPLIED и исходный (либо минимальный после 90 дней) авторитетный исход; тот же ID и другое содержимое → IDEMPOTENCY_KEY_REUSED; ни один случай не меняет ответственность.
+- При сбое после фиксации транзакции до HTTP-ответа воспроизведение использует сохранённый ответ/запись запрета. Сохранять результат транзакции/аудит/ID команды атомарно.
+- Обычный REST `Idempotency-Key` может иметь отдельно настроенный срок хранения; **никогда не использовать короткий HTTP TTL как срок защиты от повторной передачи ответственности курьером**.
+- Если у команды был определённый исход REJECTED вместо APPLIED, соответственно сохранять идентичность команды/историю отклонения, чтобы повтор того же ID никогда не обходил правила за счёт поздней переинтерпретации.
 
-## 5. Stale/manual-review handling (Q11)
+## 5. Обработка устаревших команд и ручного рассмотрения (Q11)
 
-For REVIEW_REQUIRED or REJECTED due to state change:
-1. Do not confirm original stale payload and do not rewrite `client_performed_at` as server physical custody.
-2. Present reason and event history; human review investigates what physically occurred.
-3. If server state permits **new** online confirmation, create fresh authenticated action with **new ID** and current scan/evidence; do not revive original offline command.
-4. If physical and server custody differ, open CustodyIncident (no proxy signature).
-5. Queue clear only after durable acknowledgement/manual disposition; log device/server timestamp distinctly.
+Для REVIEW_REQUIRED или REJECTED из-за изменения состояния:
+1. Не подтверждать исходное устаревшее содержимое и не превращать `client_performed_at` в серверную физическую ответственность.
+2. Показать причину и историю событий; человек выясняет, что произошло физически.
+3. Если состояние сервера допускает **новое** подтверждение с подключением, создать новое аутентифицированное действие с **новым ID** и текущим сканированием/доказательством; не возрождать исходную автономную команду.
+4. Если физическая и серверная ответственность расходятся, открыть CustodyIncident (без подписи за другого).
+5. Очищать очередь только после долговечно сохранённого подтверждения/ручного решения; отдельно записывать время устройства/сервера.
 
-## 6. Concurrency, two devices and actor security
+## 6. Конкурентность, два устройства и безопасность участника
 
-- Per-command transaction: idempotency reservation → Shipment FOR UPDATE → relevant container and Handoff locks → validate current Courier assignment/role/snapshot/state → business mutation + audit + replay → commit.
-- Commands of same Shipment serialize; two devices do not automatically resolve order. Different UUIDs for same custody action: one may commit, the other sees stale/INVALID_STATE.
-- A Courier account disabled after download is denied at sync regardless of snapshot freshness; cache replay to an unauthorized actor must not disclose current operational data.
-- Max 20 commands/batch; per-command result APPLIED, ALREADY_APPLIED, REJECTED, REVIEW_REQUIRED or RETRYABLE. Never falsely report batch-wide business success.
-- Access JWT is never queued or stored in IndexedDB; reauthenticate after expiration; purge local data on logout/account change.
-- The implemented React/TypeScript/Vite client precaches only static shell assets, sends API traffic network-only, keeps the access token in memory, and syncs in the foreground. A same-snapshot Delivery links to its immutable queued Pickup command ID.
+- Транзакция на команду: резервирование идемпотентности → отправка FOR UPDATE → блокировки значимых контейнера и передачи → проверка текущего назначения курьера/роли/снимка/состояния → бизнес-изменение, аудит и воспроизведение → фиксация.
+- Команды одной отправки сериализуются; два устройства автоматически не разрешают порядок. Разные UUID одного действия ответственности: одна команда может зафиксироваться, другая видит устаревание/INVALID_STATE.
+- Учётной записи курьера, отключённой после загрузки, отказано при синхронизации независимо от свежести снимка; воспроизведение сохранённого ответа неавторизованному участнику не должно раскрывать текущие операционные данные.
+- Не более 20 команд в пакете; результат каждой — APPLIED, ALREADY_APPLIED, REJECTED, REVIEW_REQUIRED или RETRYABLE. Никогда не сообщать ложно об общем бизнес-успехе пакета.
+- JWT доступа никогда не ставится в очередь и не хранится в IndexedDB; после истечения повторно аутентифицироваться; очищать локальные данные при выходе/смене учётной записи.
+- Реализованный клиент React/TypeScript/Vite предварительно кэширует только статические ресурсы оболочки, отправляет API-запросы только в сеть, держит токен доступа в памяти и синхронизируется на переднем плане. Доставка по тому же снимку ссылается на неизменный ID своей команды получения в очереди.
 
-## 7. Error matrix / tests
+## 7. Матрица ошибок и тесты
 
-| Case | Required behavior |
+| Случай | Обязательное поведение |
 |---|---|
-| Snapshot older than 24h | REVIEW_REQUIRED, no custody mutation |
-| Device clock altered | Server age/check unaffected; keep claimed timestamp for audit as untrusted |
-| Two devices submit distinct but conflicting commands | Exactly one applicable transition, other rejected |
-| Same command replay after 90-day response TTL | Tombstone prevents reapplication |
-| Same ID with changed payload | IDEMPOTENCY_KEY_REUSED |
-| Shipment.version bumps due only to unrelated container item update | **Not stale** when manifest, target Container/Handoff, Pickup phase and authorization dependencies all still match |
-| Target container changes then returns to same enum | Target state_version conflict detects ABA |
-| Login revoked after snapshot | FORBIDDEN/401, no mutation |
-| Network response lost after commit | Replay safe, no duplicate custody or audit |
-| Offline action physically happened but cannot be synced | Incident/review, not forged event |
+| Снимок старше 24 часов | REVIEW_REQUIRED, без изменения ответственности |
+| Часы устройства изменены | Серверные возраст/проверка не меняются; сохранить заявленное время для аудита как недоверенное |
+| Два устройства отправляют разные конфликтующие команды | Ровно один допустимый переход, другая команда отклонена |
+| Повтор команды после 90-дневного TTL ответа | Запись запрета предотвращает повторное применение |
+| Тот же ID с изменённым содержимым | IDEMPOTENCY_KEY_REUSED |
+| Shipment.version увеличился только из-за несвязанного изменения элемента контейнера | **Не устарело**, если все зависимости манифеста, целевых контейнера/передачи, этапа получения и авторизации всё ещё совпадают |
+| Целевой контейнер меняется и возвращается к тому же значению перечисления | Конфликт целевого state_version обнаруживает ABA |
+| Доступ отозван после снимка | FORBIDDEN/401, без изменений |
+| Сетевой ответ потерян после фиксации | Безопасный повтор, без дублирования ответственности или аудита |
+| Автономное действие произошло физически, но не может синхронизироваться | Инцидент/рассмотрение, а не поддельное событие |
 
-**No legal offline signature or certainty about physical action time is claimed.**
+**Юридическая автономная подпись или достоверность времени физического действия не заявляются.**
 
-## 8. Retention operations handoff
+## 8. Передача эксплуатации хранения
 
-The explicit compaction command is `python -m app.cli compact-offline-replays` (run from `backend/`). It removes detailed offline replay and causal metadata only after the retention-expiry and tombstone-age checks; the immutable tombstone remains to reserve the command ID and return the minimal authoritative result. Scheduling is environment-specific and is not defined by this product specification. See [offline sync](offline-sync.md) for the runtime behavior summary.
+Явная команда уплотнения — `python -m app.cli compact-offline-replays` (запуск из `backend/`). Она удаляет подробные автономные ответы воспроизведения и причинные метаданные только после проверок истечения хранения и возраста записи запрета; неизменная запись запрета остаётся, чтобы резервировать ID команды и возвращать минимальный авторитетный результат. Расписание зависит от среды и не определяется этой продуктовой спецификацией. Описание поведения времени выполнения — в [автономной синхронизации](offline-sync.md).

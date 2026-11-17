@@ -1,37 +1,37 @@
-# LabTrack v0.6.1 — API Contracts, Inbox, SLA and Analytics
+# LabTrack v0.6.1 — контракты API, входящие уведомления, SLA и аналитика
 
-**Requirements status: APPROVED for the synthetic MVP (2026-11-01).** Base `/api/v1`, OpenAPI 3.1 design contract. OPEN-01–04 are approved in the [Decision Register](20-decisions-v061.md). Sections explicitly marked implemented describe code behavior; other sections remain normative requirements. The static OpenAPI JSON is a draft, not the complete runtime contract; see [API guide](api.md).
+**Статус требований: УТВЕРЖДЕНЫ для синтетического MVP (2026-11-01).** Базовый путь `/api/v1`, проектный контракт OpenAPI 3.1. OPEN-01–04 утверждены в [реестре решений](20-decisions-v061.md). Разделы с явной пометкой о реализации описывают поведение кода; остальные остаются нормативными требованиями. Статический JSON OpenAPI — черновик, а не полный контракт работающего приложения; см. [руководство API](api.md).
 
-## 1. Approved API endpoints
+## 1. Утверждённые конечные точки API
 
-| Method | Path | Purpose / authorization |
+| Метод | Путь | Назначение / полномочия |
 |---|---|---|
-| POST | `/shipments/{shipment_id}/custody-incidents` | REGIONAL_OPERATIONS opens stalled/custody dispute incident |
-| GET | `/shipments/{shipment_id}/custody-incidents` | Scoped incident list, audit trail |
-| POST | `/shipments/{shipment_id}/custody-incidents/{incident_id}/attest` | Origin Sender attests Pickup facts; destination Lab staff attests Delivery facts in own account; witness policy approved |
-| POST | `/shipments/{shipment_id}/custody-incidents/{incident_id}/resolve` | Region-scoped REGIONAL_OPERATIONS records independent administrative resolution; never authenticates as missing Courier |
-| POST | `/shipments/{shipment_id}/containers/{container_id}/exceptional-receipts` | REGIONAL_OPERATIONS initiates destination-laboratory exceptional receipt review, **no immediate RECEIVED state** |
-| POST | `/shipments/{shipment_id}/container-issues/{issue_id}/proposals/{proposal_id}/withdraw` | Original REGIONAL_OPERATIONS proposer withdraws their own PENDING proposal with mandatory reason |
-| PATCH | `/shipments/{shipment_id}/receiving/items/{item_id}` | Destination LAB_OPERATOR records a result for an item in a verified RECEIVED container |
-| POST | `/shipments/{shipment_id}/receiving/complete` | Destination LAB_OPERATOR finalizes receiving after all outcomes and container dispositions are complete |
-| POST | `/shipments/{shipment_id}/receiving/reopen` | Destination LAB_MANAGER reopens completed receiving with a reason |
-| GET | `/shipments/{shipment_id}/receiving/history` | Origin Sender or destination Lab reads receiving sessions and paginated result revisions |
-| GET | `/courier/shipments/{shipment_id}/offline-manifest` | Currently assigned, active Courier obtains an immutable server-issued PHI-free snapshot |
-| POST | `/courier/sync` | Currently authorized Courier submits 1–20 immutable per-command Pickup/Delivery proposals |
-| GET | `/operations/stalled-shipments` | REGIONAL_OPERATIONS lists PostgreSQL-backed cases across authorized regions; scoped participants see only their own cases |
-| GET | `/analytics/shipments/summary` | Active REGIONAL_ANALYST or REGIONAL_OPERATIONS reads scoped aggregates only |
-| GET | `/notifications` | Recipient's Inbox, read/unread filter, limit/offset pagination |
-| POST | `/notifications/{notification_id}/read` | Mark own notification read idempotently |
-| GET | `/notifications/unread-count` | Number of unread Inbox items for authenticated recipient |
+| POST | `/shipments/{shipment_id}/custody-incidents` | REGIONAL_OPERATIONS открывает инцидент задержки/спора о передаче ответственности |
+| GET | `/shipments/{shipment_id}/custody-incidents` | Список инцидентов в разрешённой области доступа, история аудита |
+| POST | `/shipments/{shipment_id}/custody-incidents/{incident_id}/attest` | Отправитель свидетельствует о фактах забора; сотрудники целевой лаборатории свидетельствуют о фактах доставки под своими учётными записями; правила свидетелей утверждены |
+| POST | `/shipments/{shipment_id}/custody-incidents/{incident_id}/resolve` | REGIONAL_OPERATIONS с региональной областью доступа записывает независимое административное решение; никогда не аутентифицируется как отсутствующий курьер |
+| POST | `/shipments/{shipment_id}/containers/{container_id}/exceptional-receipts` | REGIONAL_OPERATIONS начинает рассмотрение исключительной приёмки целевой лабораторией, **без немедленного состояния RECEIVED** |
+| POST | `/shipments/{shipment_id}/container-issues/{issue_id}/proposals/{proposal_id}/withdraw` | Первоначальный автор REGIONAL_OPERATIONS отзывает собственное предложение PENDING с обязательной причиной |
+| PATCH | `/shipments/{shipment_id}/receiving/items/{item_id}` | LAB_OPERATOR целевой лаборатории записывает результат позиции проверенного контейнера RECEIVED |
+| POST | `/shipments/{shipment_id}/receiving/complete` | LAB_OPERATOR целевой лаборатории завершает приёмку после определения всех результатов и итогов контейнеров |
+| POST | `/shipments/{shipment_id}/receiving/reopen` | LAB_MANAGER целевой лаборатории повторно открывает завершённую приёмку с указанием причины |
+| GET | `/shipments/{shipment_id}/receiving/history` | Отправитель или целевая лаборатория читает сессии приёмки и исправления результатов с постраничной выдачей |
+| GET | `/courier/shipments/{shipment_id}/offline-manifest` | Текущий назначенный активный курьер получает неизменяемый серверный снимок без персональных медицинских данных |
+| POST | `/courier/sync` | Курьер с текущими полномочиями отправляет 1–20 неизменяемых предложений команд забора/доставки |
+| GET | `/operations/stalled-shipments` | REGIONAL_OPERATIONS получает случаи из PostgreSQL по разрешённым регионам; участники видят только собственные случаи в пределах полномочий |
+| GET | `/analytics/shipments/summary` | Активный REGIONAL_ANALYST или REGIONAL_OPERATIONS читает только агрегаты в разрешённой области |
+| GET | `/notifications` | Входящие уведомления получателя, фильтр прочитанных/непрочитанных, постраничная выдача limit/offset |
+| POST | `/notifications/{notification_id}/read` | Идемпотентная отметка собственного уведомления прочитанным |
+| GET | `/notifications/unread-count` | Число непрочитанных входящих уведомлений аутентифицированного получателя |
 
-**No new third Sample/Container issue kind.** A CustodyIncident is an administrative review. A failed incident is not equivalent to SAMPLE REJECTED.
+**Новый третий тип проблемы пробирки/контейнера не вводится.** CustodyIncident — административное рассмотрение. Неуспешный инцидент не равнозначен SAMPLE REJECTED.
 
-Example withdrawal:
+Пример отзыва:
 ```json
 {"reason":"Восстановлена связь с курьером; обстоятельства уточняются"}
 ```
 
-Example incident opening:
+Пример открытия инцидента:
 ```json
 {
   "phase":"DELIVERY",
@@ -41,141 +41,141 @@ Example incident opening:
 }
 ```
 
-Separate attestations (the server validates each against incident.phase):
+Отдельные свидетельства (сервер проверяет каждое на соответствие incident.phase):
 
-Origin Sender (Pickup facts):
+Отправитель (факты забора):
 ```json
 {"statement":"Все контейнеры остались в учреждении","physical_release_occurred":false,"containers_at_origin":true}
 ```
 
-Destination Lab witness (Delivery, personally present):
+Свидетель целевой лаборатории (доставка, личное присутствие):
 ```json
 {"container_code":"LT-C-EXAMPLE-02","statement":"Лично наблюдал физическое предъявление контейнера","physically_present":true}
 ```
 
-For exceptional receipt, exactly two authenticated destination-laboratory employees must independently submit the Delivery form; one is an active LAB_MANAGER. The region-scoped administrative resolver is not one of these witnesses.
+Для исключительной приёмки ровно два аутентифицированных сотрудника целевой лаборатории должны независимо отправить форму доставки; один имеет активную роль LAB_MANAGER. Региональный сотрудник, принимающий административное решение, не входит в число этих свидетелей.
 
-Regional administrative finalization:
+Региональное административное завершение:
 ```json
 {"resolution":"EXCEPTIONAL_RECEIPT_VERIFIED","reason":"Два независимых свидетельства проверены; Pickup ранее подтверждён"}
 ```
 
-Other permitted outcomes are NO_PHYSICAL_TRANSFER (Pickup only, does not withdraw automatically), ESCALATED_NO_CUSTODY_CHANGE and CONTAINER_ISSUE_REFERRED (no implicit custody change).
+Другие разрешённые результаты — NO_PHYSICAL_TRANSFER (только забор, без автоматического отзыва), ESCALATED_NO_CUSTODY_CHANGE и CONTAINER_ISSUE_REFERRED (без неявного изменения передачи ответственности).
 
-The server records actor identity + scoped organization/role + server timestamp itself. **Do not accept arbitrary witness user IDs or signatures for someone else in requests.**
+Сервер сам записывает личность исполнителя + организацию/роль в пределах полномочий + серверное время. **Не принимайте в запросах произвольные ID пользователей-свидетелей или подписи за другого человека.**
 
-Response of exceptional receipt initiation is an incident in OPEN/PENDING_EVIDENCE, **never** a successful Handoff. After two qualifying personally authenticated destination-laboratory witnesses (at least one LAB_MANAGER), confirmed whole-Shipment Pickup and separate regional administrative resolution, the container may transition to RECEIVED with `receipt_evidence.method=EXCEPTIONAL`. Missing Courier's Handoff remains unconfirmed/superseded.
+Ответ на начало исключительной приёмки — инцидент в OPEN/PENDING_EVIDENCE, **никогда** не успешная передача. После двух подходящих лично аутентифицированных свидетелей целевой лаборатории (хотя бы один LAB_MANAGER), подтверждённого забора всей партии и отдельного регионального административного решения контейнер может перейти в RECEIVED с `receipt_evidence.method=EXCEPTIONAL`. Передача отсутствующего курьера остаётся неподтверждённой/замещённой.
 
-### Final incident resolution permissions (OPEN-01–03 approved)
+### Окончательные полномочия разрешения инцидента (OPEN-01–03 утверждены)
 
-- `POST /custody-incidents` and `POST /containers/{container_id}/exceptional-receipts`: region-scoped **REGIONAL_OPERATIONS** starts review.
-- `POST /custody-incidents/{incident_id}/attest`: for Pickup incident, active origin **SENDER_OPERATOR** attests origin facts. For Delivery case, active destination Lab users attest facts. An exceptional receipt needs **two distinct destination-lab staff**, at least one **LAB_MANAGER**; no second signature from the same user under another role. Actor is JWT caller, not a request-supplied user ID.
-- `POST /custody-incidents/{incident_id}/resolve`: authenticated **REGIONAL_OPERATIONS** (not one of exceptional Lab witnesses) independently records administrative outcome. `EXCEPTIONAL_RECEIPT_VERIFIED` is allowed **only** if Shipment Pickup is CONFIRMED, both qualifying attestations exist and container is eligible; in the same transaction create receipt evidence, supersede pending Delivery (not CONFIRMED), and transition only that container to RECEIVED. No bulk tube acceptance.
-- `NO_PHYSICAL_TRANSFER`: administrative conclusion for origin review with Sender attestation; **does not** mark Pickup confirmed or silently cancel. Sender must separately call the existing Pickup withdraw/cancel commands.
-- `ESCALATED_NO_CUSTODY_CHANGE`: administrative review may finish without changing Shipment/Container custody. A disputed Pickup **never** becomes confirmed through the incident endpoint.
-- Resolution route rejects incompatible incident kinds/phase/outcome or stale incident/evidence with 409. Existing two-stage ContainerIssue approval remains required for retry/undelivered closure.
+- `POST /custody-incidents` и `POST /containers/{container_id}/exceptional-receipts`: рассмотрение начинает **REGIONAL_OPERATIONS** с региональной областью доступа.
+- `POST /custody-incidents/{incident_id}/attest`: для инцидента забора активный **SENDER_OPERATOR** отправляющей организации свидетельствует о фактах на стороне отправителя. Для доставки свидетельствуют активные пользователи целевой лаборатории. Исключительная приёмка требует **двух разных сотрудников целевой лаборатории**, хотя бы одного **LAB_MANAGER**; вторая подпись того же пользователя под другой ролью недопустима. Исполнитель определяется вызывающим пользователем JWT, а не ID пользователя из запроса.
+- `POST /custody-incidents/{incident_id}/resolve`: аутентифицированный **REGIONAL_OPERATIONS** (не один из свидетелей исключительной приёмки) независимо записывает административный результат. `EXCEPTIONAL_RECEIPT_VERIFIED` разрешён **только** если забор партии CONFIRMED, существуют оба подходящих свидетельства и контейнер соответствует условиям; в той же транзакции создайте свидетельство получения, заместите ожидающую доставку (не CONFIRMED) и переведите только этот контейнер в RECEIVED. Массового принятия пробирок нет.
+- `NO_PHYSICAL_TRANSFER`: административное заключение рассмотрения на стороне отправителя со свидетельством отправителя; **не** подтверждает забор и не выполняет скрытую отмену. Отправитель должен отдельно вызвать существующие команды отзыва/отмены забора.
+- `ESCALATED_NO_CUSTODY_CHANGE`: административное рассмотрение может завершиться без изменения передачи ответственности за партию/контейнер. Спорный забор **никогда** не становится подтверждённым через конечную точку инцидентов.
+- Маршрут решения отклоняет несовместимые вид/фазу/результат инцидента или устаревший инцидент/свидетельства с 409. Существующее двухэтапное согласование ContainerIssue по-прежнему обязательно для повтора/закрытия без доставки.
 
-### Final offline relevant-state dependency rule (OPEN-04 approved)
+### Окончательное правило зависимости от значимого состояния для офлайн-команд (OPEN-04 утверждено)
 
-Each Courier offline command checks sealed manifest revision, **target** custody state version/attempt, whole-Shipment Pickup validity/phase, current assigned Courier and active authorization. Pickup checks its own handoff/custody phase version; Delivery checks its target Container and Delivery attempt version. Irrelevant mutations elsewhere in Shipment are not automatically a conflict; there is **no automatic rebase of any relevant change**. Target ABA (state changed and changed back) must still conflict via monotonic version.
+Каждая офлайн-команда курьера проверяет версию запечатанного манифеста, версию/попытку **целевого** состояния передачи ответственности, действительность/фазу забора всей партии, текущего назначенного курьера и активные полномочия. Забор проверяет собственную версию передачи/фазы ответственности; доставка проверяет целевой контейнер и версию попытки доставки. Несвязанные изменения в других частях партии не являются автоматическим конфликтом; **автоматическое согласование со значимыми изменениями не допускается**. Цикл ABA целевого состояния (изменение и возврат) всё равно должен давать конфликт благодаря монотонной версии.
 
-### Draft deadline editing (required by Q12)
+### Изменение срока черновика (требование Q12)
 
-Introduce `PATCH /shipments/{shipment_id}` for scoped Sender in DRAFT with `{"expected_delivery_at":"2026-11-02T09:00:00Z"}` (or null while still DRAFT). The existing CreateShipmentRequest leaves this field optional, so a draft must be editable **before** it can be sealed. No changes to destination or Courier via this endpoint. `seal` rejects null or timestamp not strictly later than current authoritative server time; all validations transactional.
+Введите `PATCH /shipments/{shipment_id}` для отправителя с нужной областью доступа в DRAFT с `{"expected_delivery_at":"2026-11-02T09:00:00Z"}` (или null, пока сохраняется DRAFT). Существующий CreateShipmentRequest оставляет поле необязательным, поэтому черновик должен допускать редактирование **до** запечатывания. Через эту конечную точку нельзя менять получателя или курьера. `seal` отклоняет null или время, которое не строго позже текущего достоверного серверного времени; все проверки выполняются транзакционно.
 
-## 2. Existing API changes
+## 2. Изменения существующего API
 
-- `CreateShipmentRequest.expected_delivery_at` nullable/optional in DRAFT; `POST /shipments/{id}/seal` rejects missing/past/non-future deadline using server clock with business error `DELIVERY_DEADLINE_REQUIRED` / `DELIVERY_DEADLINE_INVALID`. Validation on CreateShipment **and** seal ensures configured pilot destination Lab, no client change to destination.
-- `ContainerIssueResolutionProposal` exposes withdrawal actor/time/reason. Add `WITHDRAWN` transition only from PENDING by original proposer; simultaneous decide/withdraw yields 409 for loser.
-- `Handoff` can report `SUPERSEDED` for pending exceptional receipt; never mark absent Courier `CONFIRMED`.
-- `TransportContainer` includes stable `receipt_evidence` metadata or safe reference and state_version; ordinary and exceptional evidence are distinguishable.
-- `GET /courier/shipments/{id}/offline-manifest` returns `snapshot_id`, `issued_at`, sealed manifest_revision and relevant custody versions, server-scoped actor, no PHI.
-- Courier `/sync` request includes snapshot_id + expected relevant target-state version and command payload. Per-command statuses include REVIEW_REQUIRED; no stale payload is executed after manual review, use new live action if safe.
-- Client may keep independent offline queues on multiple devices; server serialization/idempotency controls conflicts (Q10).
-- `POST /shipments/{id}/receiving/items/{item_id}` is **not** introduced; retain existing `PATCH` route. Eligibility now checks verified NORMAL **or** approved EXCEPTIONAL receipt evidence + OPEN session.
-- Existing ContainerIssue MISSING/REJECTED and mixed-shipment completion rules remain unchanged. After RECEIVED, a container-level issue must not rewind custody: record REJECTED outcomes individually on affected samples.
+- `CreateShipmentRequest.expected_delivery_at` допускает null/необязательно в DRAFT; `POST /shipments/{id}/seal` отклоняет отсутствующий/прошедший/не будущий срок по серверным часам с бизнес-ошибкой `DELIVERY_DEADLINE_REQUIRED` / `DELIVERY_DEADLINE_INVALID`. Проверка при CreateShipment **и** запечатывании обеспечивает настроенную пилотную целевую лабораторию, клиент не может менять получателя.
+- `ContainerIssueResolutionProposal` предоставляет исполнителя/время/причину отзыва. Добавьте переход в `WITHDRAWN` только из PENDING первоначальным автором; при одновременных решении/отзыве проигравший получает 409.
+- `Handoff` может сообщать `SUPERSEDED` для ожидающей исключительной приёмки; никогда не отмечайте отсутствующего курьера как `CONFIRMED`.
+- `TransportContainer` содержит стабильные метаданные `receipt_evidence` или безопасную ссылку и state_version; обычные и исключительные свидетельства различимы.
+- `GET /courier/shipments/{id}/offline-manifest` возвращает `snapshot_id`, `issued_at`, запечатанную manifest_revision и значимые версии передачи ответственности, исполнителя, определённого сервером в пределах полномочий, без персональных медицинских данных.
+- Запрос `/sync` курьера включает snapshot_id + ожидаемую значимую версию целевого состояния и содержимое команды. Статусы отдельных команд включают REVIEW_REQUIRED; устаревшее содержимое не исполняется после ручного рассмотрения, при безопасности используйте новое действие с подключением к серверу.
+- Клиент может хранить независимые офлайн-очереди на нескольких устройствах; серверная сериализация/идемпотентность контролирует конфликты (Q10).
+- `POST /shipments/{id}/receiving/items/{item_id}` **не** вводится; сохраните существующий маршрут `PATCH`. Условия теперь проверяют подтверждённое свидетельство NORMAL **или** утверждённое EXCEPTIONAL + сессию OPEN.
+- Существующие ContainerIssue MISSING/REJECTED и правила завершения смешанной партии остаются без изменений. После RECEIVED проблема контейнера не должна откатывать передачу ответственности: записывайте результаты REJECTED отдельно для затронутых пробирок.
 
-### Stage F receiving lifecycle (implemented)
+### Жизненный цикл приёмки этапа F (реализован)
 
-`PATCH /shipments/{shipment_id}/receiving/items/{item_id}` requires active destination `LAB_OPERATOR` membership, verified NORMAL or EXCEPTIONAL receipt evidence for the item's RECEIVED container, and an OPEN receiving session. A received container remains writable while sibling containers are unresolved. Each accepted change updates the current item projection and appends an immutable `ReceiptRevision` with actor, reason/comment, prior and new values, and server timestamp; mutation, audit and idempotency response are transactional.
+`PATCH /shipments/{shipment_id}/receiving/items/{item_id}` требует активное назначение роли `LAB_OPERATOR` целевой лаборатории, проверенное свидетельство получения NORMAL или EXCEPTIONAL для контейнера позиции в RECEIVED и сессию приёмки OPEN. Полученный контейнер остаётся доступным для записи, пока остальные контейнеры не разрешены. Каждое принятое изменение обновляет текущее представление позиции и добавляет неизменяемую `ReceiptRevision` с исполнителем, причиной/комментарием, прежними и новыми значениями и серверным временем; изменение, аудит и ответ идемпотентности транзакционны.
 
-`POST /shipments/{shipment_id}/receiving/complete` accepts an omitted body or `{}` (explicit JSON `null` is rejected) and requires an idempotency key. Completion requires every container terminal (`RECEIVED` or `UNDELIVERED_CLOSED`), at least one received container, results for every received item, no results for undelivered items, and one OPEN session. It closes that session and sets `COMPLETED` only when every container was received and every item is `ACCEPTED`; otherwise it sets `COMPLETED_WITH_ISSUES`.
+`POST /shipments/{shipment_id}/receiving/complete` принимает отсутствующее тело или `{}` (явное JSON `null` отклоняется) и требует ключ идемпотентности. Завершение требует конечного состояния каждого контейнера (`RECEIVED` или `UNDELIVERED_CLOSED`), хотя бы одного полученного контейнера, результатов всех полученных позиций, отсутствия результатов недоставленных позиций и одной сессии OPEN. Оно закрывает сессию и устанавливает `COMPLETED` только если все контейнеры получены и каждая позиция `ACCEPTED`; иначе устанавливает `COMPLETED_WITH_ISSUES`.
 
-`POST /shipments/{shipment_id}/receiving/reopen` requires an active destination `LAB_MANAGER`, a nonblank reason, and an idempotency key. It accepts only `COMPLETED` or `COMPLETED_WITH_ISSUES`, creates a new OPEN session with the next sequence, and preserves prior sessions, results and revisions. `GET /shipments/{shipment_id}/receiving/history` is visible to the origin Sender and destination Lab Operator/Manager; `limit` defaults to 20 (maximum 100), `offset` to 0, and applies to the revision history. Stage F introduced lifecycle migration `0007_stage_f_lifecycle` and integrity migration `0008_stage_f_integrity`; Stage G adds `0009_stage_g_offline`. PostgreSQL guards require an active SAMPLE reason code matching each MISSING/REJECTED result, forbid reason/comment values for ACCEPTED or unset results, and require the Shipment to be `COMPLETED` or `COMPLETED_WITH_ISSUES` before a sequence>1 reopen session can be inserted.
+`POST /shipments/{shipment_id}/receiving/reopen` требует активного `LAB_MANAGER` целевой лаборатории, непустую причину и ключ идемпотентности. Оно принимает только `COMPLETED` или `COMPLETED_WITH_ISSUES`, создаёт новую сессию OPEN со следующим порядковым номером и сохраняет прежние сессии, результаты и исправления. `GET /shipments/{shipment_id}/receiving/history` доступен отправителю и оператору/менеджеру целевой лаборатории; `limit` по умолчанию 20 (максимум 100), `offset` — 0, они применяются к истории исправлений. Этап F ввёл миграцию жизненного цикла `0007_stage_f_lifecycle` и миграцию целостности `0008_stage_f_integrity`; этап G добавляет `0009_stage_g_offline`. Защиты PostgreSQL требуют активный код причины SAMPLE, соответствующий каждому результату MISSING/REJECTED, запрещают значения причины/комментария для ACCEPTED или неустановленных результатов и требуют состояние партии `COMPLETED` или `COMPLETED_WITH_ISSUES` до вставки сессии повторного открытия с sequence>1.
 
-### Stage G Courier offline API and operations (implemented)
+### Офлайн-API курьера и операции этапа G (реализованы)
 
-`GET /courier/shipments/{shipment_id}/offline-manifest` checks the active Courier assignment and authorization and persists an immutable snapshot bound to actor, assignment, Shipment and region. It contains sealed container codes/statuses and relevant versions, no patient/sample data; `issued_at` is database time. `POST /courier/sync` validates a batch of 1–20 typed commands, then commits each command independently and in request order. It rechecks current authorization before replay lookup and validates the 24-hour snapshot policy, sealed manifest revision, Pickup phase version and relevant target-container version. It does not use aggregate `Shipment.version` alone.
+`GET /courier/shipments/{shipment_id}/offline-manifest` проверяет активное назначение курьера и полномочия и сохраняет неизменяемый снимок, привязанный к исполнителю, назначению, партии и региону. Он содержит коды/статусы запечатанных контейнеров и значимые версии, без данных пациентов/пробирок; `issued_at` — время БД. `POST /courier/sync` проверяет пакет из 1–20 типизированных команд, затем фиксирует каждую команду независимо и в порядке запроса. Он повторно проверяет текущие полномочия до поиска сохранённого результата и проверяет 24-часовую политику снимка, версию запечатанного манифеста, версию фазы забора и значимую версию целевого контейнера. Одной агрегатной `Shipment.version` он не пользуется.
 
-The sync outcomes are `APPLIED`, `ALREADY_APPLIED`, `REJECTED`, `RETRYABLE`, and `REVIEW_REQUIRED`. Authorized terminal outcomes are persisted with audit and replay identity; masked authorization denials are not recorded, and RETRYABLE is not persisted. Exact ID/body replay returns the original outcome; changed payload cannot reuse the ID. Full response and causal data remain for at least 90 days; explicit compaction retains an immutable tombstone. E2E-06's same-snapshot Pickup→Delivery sequence uses optional `depends_on_command_id`; Delivery can rely on Pickup only when it names an APPLIED command by the same actor for the same Shipment and snapshot and the live relevant versions equal that Pickup's recorded post-state. No generic rebase is allowed.
+Результаты синхронизации — `APPLIED`, `ALREADY_APPLIED`, `REJECTED`, `RETRYABLE` и `REVIEW_REQUIRED`. Конечные результаты при наличии полномочий сохраняются с аудитом и идентичностью повторного выполнения; скрытые отказы авторизации не записываются, RETRYABLE не сохраняется. Повтор с теми же ID/телом возвращает исходный результат; изменённое содержимое не может повторно использовать ID. Полный ответ и данные причинных связей остаются не менее 90 дней; явное сокращение сохраняет неизменяемую запись-маркер. Последовательность забора→доставки E2E-06 по одному снимку использует необязательный `depends_on_command_id`; доставка может опираться на забор только при ссылке на команду APPLIED того же исполнителя, партии и снимка и совпадении текущих значимых версий с записанным состоянием после забора. Общее автоматическое согласование состояния запрещено.
 
-The React/TypeScript/Vite PWA stores per-user snapshots and immutable commands in IndexedDB; access tokens remain in memory, API traffic is network-only, and the service worker caches only shell assets. It reauthenticates after reload, warns and purges the scoped queue on logout/account change, and syncs in the foreground. A locally pending command is not a server custody event. Production hosting is outside Stage G.
+PWA React/TypeScript/Vite хранит снимки отдельных пользователей и неизменяемые команды в IndexedDB; токены доступа остаются в памяти, трафик API идёт только через сеть, а служебный обработчик браузера кеширует только ресурсы оболочки. После перезагрузки нужна повторная аутентификация; при выходе/смене аккаунта приложение предупреждает и очищает очередь в соответствующей области, синхронизация идёт в активном окне. Локально ожидающая команда не является серверным событием передачи ответственности. Производственный хостинг не входит в этап G.
 
-Detailed replay compaction is available as `python -m app.cli compact-offline-replays` from `backend/`. Scheduling and deployment details are environment-specific and are not part of this API contract.
+Сокращение подробных данных повторного выполнения доступно командой `python -m app.cli compact-offline-replays` из `backend/`. Расписание и детали развёртывания зависят от среды и не входят в этот контракт API.
 
-### Stage I role-workspace API additions (implemented)
+### Дополнения API рабочих областей по ролям этапа I (реализованы)
 
-- `GET /organizations/{organization_id}/couriers` requires an active `SENDER_OPERATOR` grant to that organization and returns only active Couriers in its active region, with stable ordering and pagination. Email addresses are not returned.
-- `GET /shipments` is paginated and role-scoped: Sender Operators and Lab Managers see their organization's shipments, Lab Operators see shipments for their destination organization, and Couriers see their assigned shipments in an active Courier region.
-- HTTP idempotency now includes route resource context as well as the validated request body; an identical key/body targeting another resource cannot replay the first resource's response. Migration `0011_http_request_scope` adds/backfills this context.
+- `GET /organizations/{organization_id}/couriers` требует активное назначение `SENDER_OPERATOR` этой организации и возвращает только активных курьеров её активного региона, со стабильным порядком и постраничной выдачей. Адреса электронной почты не возвращаются.
+- `GET /shipments` имеет постраничную выдачу и ограничения по ролям: операторы отправителя и менеджеры лаборатории видят партии своей организации, операторы лаборатории — партии своей целевой организации, курьеры — назначенные им партии в активном регионе курьера.
+- HTTP-идемпотентность теперь включает контекст ресурса маршрута наряду с проверенным телом запроса; одинаковые ключ/тело для другого ресурса не могут повторно вернуть ответ первого ресурса. Миграция `0011_http_request_scope` добавляет/заполняет этот контекст.
 
-These additions support the role-specific workspaces. Their current implementation is summarized in the [API guide](api.md) and [workflows](workflows.md).
+Эти дополнения поддерживают рабочие области по ролям. Текущая реализация кратко описана в [руководстве API](api.md) и [рабочих процессах](workflows.md).
 
-## 3. Inbox semantics (Q15)
+## 3. Семантика входящих уведомлений (Q15)
 
-- `GET /notifications?unread_only=true&limit=20&offset=0` returns own notifications (safe event metadata, not patient data). Optional query `unread_only` default false.
-- `POST /notifications/{notification_id}/read` requires active recipient identity and ownership; setting `read_at` twice is idempotent and returns existing representation.
-- `GET /notifications/unread-count` returns `{"count":N}`.
-- `notifications` table deduplicates (recipient_user_id,event_id,type). Celery creates/delivers notifications best effort. Redis or Celery worker failure may delay or miss Inbox entries; stalled cases are queried from authoritative PostgreSQL and remain visible through those failures. PostgreSQL has no dashboard fallback; an outage may make dashboard APIs unavailable.
-- Notifications to stage participants obey org/region scope; regional escalation excludes row-level Sample data for REGIONAL_ANALYST.
+- `GET /notifications?unread_only=true&limit=20&offset=0` возвращает собственные уведомления (безопасные метаданные событий, а не данные пациентов). Необязательный параметр `unread_only` по умолчанию false.
+- `POST /notifications/{notification_id}/read` требует активного получателя и принадлежность уведомления ему; повторная установка `read_at` идемпотентна и возвращает существующее представление.
+- `GET /notifications/unread-count` возвращает `{"count":N}`.
+- Таблица `notifications` устраняет дубли (recipient_user_id,event_id,type). Celery создаёт/доставляет уведомления без гарантии. Сбой Redis или обработчика Celery может задержать или пропустить входящие уведомления; задержанные случаи запрашиваются из достоверной PostgreSQL и остаются видимыми при этих сбоях. Для PostgreSQL резервного источника панели нет; её отказ может сделать API панели недоступным.
+- Уведомления участникам этапов соблюдают область организации/региона; региональная эскалация исключает данные отдельных пробирок для REGIONAL_ANALYST.
 
-Inbox generation is best-effort and does not define a delivery SLA. PostgreSQL business state remains authoritative when Redis or Celery is unavailable.
+Формирование входящих уведомлений не гарантировано и не задаёт SLA доставки. Бизнес-состояние PostgreSQL остаётся достоверным при недоступности Redis или Celery.
 
-## Request correlation
+## Сопоставление запросов
 
-Every API response includes a server-generated UUID in `X-Request-ID`. The server ignores caller-supplied values for that header and never echoes or logs them. Use the returned UUID to correlate the request with safe structured server logs.
+Каждый ответ API включает сгенерированный сервером UUID в `X-Request-ID`. Сервер игнорирует значения этого заголовка от вызывающего клиента, никогда не возвращает их и не пишет в журналы. Используйте возвращённый UUID для сопоставления запроса с безопасными структурированными серверными журналами.
 
-## 4. Stalled operation monitoring (Q19)
+## 4. Мониторинг задержанных операций (Q19)
 
-| Workflow | Approved synthetic-MVP threshold | Response |
+| Рабочий процесс | Утверждённый порог синтетического MVP | Реакция |
 |---|---|---|
-| Shipment PICKUP_PENDING | 4 hours | Alert relevant Sender/Courier and escalate to REGIONAL_OPERATIONS |
-| Container DELIVERY_PENDING | 4 hours | Alert assigned Courier, destination Lab and regional operations |
-| ResolutionProposal PENDING | 24 hours | Alert proposer/manager and regional operations; may withdraw or decide |
-| Shipment expected_delivery_at exceeded | Calendar timestamp | Overdue metric/alert if not terminal |
+| Партия PICKUP_PENDING | 4 часа | Уведомить соответствующих отправителя/курьера и передать REGIONAL_OPERATIONS |
+| Контейнер DELIVERY_PENDING | 4 часа | Уведомить назначенного курьера, целевую лабораторию и региональных операторов |
+| ResolutionProposal PENDING | 24 часа | Уведомить автора/менеджера и региональных операторов; возможны отзыв или решение |
+| Превышен expected_delivery_at партии | Календарная отметка времени | Метрика/оповещение о просрочке, если состояние не конечное |
 
-Thresholds are config constants, not compliance SLA. Poll/query from PostgreSQL; never auto-confirm, auto-close, or alter custody just due to timer.
+Пороги — константы конфигурации, а не нормативное SLA. Выполняйте опрос/запрос PostgreSQL; никогда не подтверждайте, не закрывайте и не меняйте передачу ответственности автоматически только из-за таймера.
 
-`GET /operations/stalled-shipments` is available to active REGIONAL_OPERATIONS across all their authorized regions. Participants also see only their own scoped cases: SENDER_OPERATOR sees owned Shipment Pickup/overdue cases; the assigned COURIER sees their own Pickup/Delivery/overdue cases; destination LAB_OPERATOR sees Delivery/overdue cases; destination LAB_MANAGER additionally sees destination pending-proposal cases. REGIONAL_ANALYST receives no case rows. The optional `region_id` filter only narrows cases; when omitted, results may span authorized regions and each item includes its `region_id`.
+`GET /operations/stalled-shipments` доступен активному REGIONAL_OPERATIONS по всем разрешённым ему регионам. Участники также видят только свои случаи в пределах полномочий: SENDER_OPERATOR — забор/просрочку собственных партий; назначенный COURIER — свои заборы/доставки/просрочки; LAB_OPERATOR целевой лаборатории — доставки/просрочки; LAB_MANAGER целевой лаборатории дополнительно — ожидающие предложения для неё. REGIONAL_ANALYST не получает строки случаев. Необязательный фильтр `region_id` только сужает случаи; без него результаты могут охватывать разрешённые регионы, и каждый элемент включает свой `region_id`.
 
-Return one item per qualifying case: `PICKUP_PENDING`, `DELIVERY_PENDING`, `PROPOSAL_PENDING`, or `SHIPMENT_OVERDUE`. A Shipment may therefore occur in multiple items. `total` is the case count before pagination. Order oldest `last_event_at` first, then by case type, Shipment ID and nullable container/proposal IDs. `last_event_at` is the threshold-driving Handoff/proposal timestamp or Shipment deadline, and `age_seconds` is measured from that timestamp. Delivery cases include their `container_id`; proposal cases include both `proposal_id` and the associated `container_id`. Items contain no row-level Sample data. A notification or worker record is not required for a case to appear.
+Возвращайте один элемент на подходящий случай: `PICKUP_PENDING`, `DELIVERY_PENDING`, `PROPOSAL_PENDING` или `SHIPMENT_OVERDUE`. Поэтому партия может встречаться в нескольких элементах. `total` — число случаев до постраничной выдачи. Сначала сортируйте по самому старому `last_event_at`, затем по типу случая, ID партии и допускающим null ID контейнера/предложения. `last_event_at` — отметка времени передачи/предложения или срок партии, от которых зависит порог; `age_seconds` измеряется от этой отметки. Случаи доставки включают свой `container_id`; случаи предложений — `proposal_id` и связанный `container_id`. Элементы не содержат данных отдельных пробирок. Для появления случая не нужны уведомление или запись фонового обработчика.
 
-## 5. Analytics contract (Q16–Q18)
+## 5. Контракт аналитики (Q16–Q18)
 
-- `GET /analytics/shipments/summary?granularity=day|week&from=...&to=...`. `from` inclusive, `to` exclusive. **UTC calendar boundaries**; weeks start Monday UTC. User locale changes display only.
-- Count each Shipment once according to latest current state; current Sample results use latest accepted receipt revision. Historical event/revision timeline is a **separate** event count; do not count reopening as a new Shipment.
-- `average_full_shipment_delivery_seconds`: among Shipments with **every container RECEIVED**, confirmed Pickup server timestamp → latest confirmed Container Receipt server timestamp. Partially or wholly undelivered Shipments excluded from this average.
-- `average_received_container_delivery_seconds`: among **RECEIVED containers in partially delivered Shipments**, confirmed Shipment Pickup → each received container's server receipt timestamp. Never treat a missing container as a successful zero duration.
-- For the full-delivery mean, numerator is the sum of eligible Pickup-to-last-receipt durations and denominator is the number of Shipments with every container RECEIVED and confirmed Pickup/receipt timestamps. For the partial-delivery mean, numerator is the sum of eligible Pickup-to-container-receipt durations and denominator is the number of RECEIVED containers in partially delivered Shipments. A mean with no eligible observations is null.
-- For this Stage H slice, `Shipment.created_at` selects the current-state cohort for the optional `from`/`to` range. Count `total` and `by_status` by distinct Shipment. Count Sample MISSING/REJECTED from current receipt rows after the latest accepted receipt revision; count container MISSING/REJECTED by each container's latest issue outcome.
-- `partially_completed_with_issues` counts current `COMPLETED_WITH_ISSUES` Shipments with more than zero but fewer than all containers `RECEIVED`. In each period bucket, `partially_delivered_shipments` counts Shipments with more than zero but fewer than all containers `RECEIVED`, including completed mixed (`COMPLETED_WITH_ISSUES`) Shipments. `completed_shipments` counts Shipments currently `COMPLETED` or `COMPLETED_WITH_ISSUES`; `sample_issues` counts current MISSING plus REJECTED receipt rows; `container_issues` counts containers whose latest issue outcome is MISSING or REJECTED.
-- Facility-level breakdown covers sender organizations and the central destination. Include each distinct sender/destination organization once per Shipment. `shipment_count` counts distinct associated Shipments, `completed_count` counts Shipments currently `COMPLETED` or `COMPLETED_WITH_ISSUES`, and `with_issues_count` counts Shipments currently `COMPLETED_WITH_ISSUES`.
-- Active REGIONAL_ANALYST and REGIONAL_OPERATIONS may read aggregates only. The summary has one top-level `region_id`: infer it when exactly one active region is granted; require an authorized `region_id` when multiple are granted. An optional organization filter only narrows results within that region.
-- Event timeline and as-of analytics are not equivalent: v0.6.1 current dashboard is **latest state**, and audit reports are event history.
+- `GET /analytics/shipments/summary?granularity=day|week&from=...&to=...`. `from` включительно, `to` исключительно. **Календарные границы UTC**; недели начинаются в понедельник UTC. Локаль пользователя меняет только отображение.
+- Учитывайте каждую партию один раз по последнему текущему состоянию; текущие результаты пробирок используют последнее принятое исправление приёмки. Историческая последовательность событий/исправлений — **отдельный** подсчёт событий; не учитывайте повторное открытие как новую партию.
+- `average_full_shipment_delivery_seconds`: среди партий, где **все контейнеры RECEIVED**, от серверного времени подтверждённого забора до последнего серверного времени подтверждённого получения контейнера. Частично или полностью недоставленные партии исключаются из среднего.
+- `average_received_container_delivery_seconds`: среди **контейнеров RECEIVED в частично доставленных партиях**, от подтверждённого забора партии до серверного времени получения каждого полученного контейнера. Никогда не считайте отсутствующий контейнер успешной нулевой длительностью.
+- Для среднего полной доставки числитель — сумма подходящих длительностей от забора до последнего получения, знаменатель — число партий со всеми контейнерами RECEIVED и подтверждёнными отметками забора/получения. Для среднего частичной доставки числитель — сумма подходящих длительностей от забора до получения контейнера, знаменатель — число контейнеров RECEIVED в частично доставленных партиях. Без подходящих наблюдений среднее равно null.
+- Для этой части этапа H `Shipment.created_at` выбирает группу по текущему состоянию для необязательного диапазона `from`/`to`. Считайте `total` и `by_status` по уникальным партиям. Считайте пробирки MISSING/REJECTED по текущим строкам приёмки после последнего принятого исправления; контейнеры MISSING/REJECTED — по последнему результату проблемы каждого контейнера.
+- `partially_completed_with_issues` считает текущие партии `COMPLETED_WITH_ISSUES`, у которых больше нуля, но не все контейнеры `RECEIVED`. В каждом периоде `partially_delivered_shipments` считает партии с более чем нулём, но не всеми контейнерами `RECEIVED`, включая завершённые смешанные партии (`COMPLETED_WITH_ISSUES`). `completed_shipments` считает партии, сейчас находящиеся в `COMPLETED` или `COMPLETED_WITH_ISSUES`; `sample_issues` — текущие строки приёмки MISSING плюс REJECTED; `container_issues` — контейнеры, последний результат проблемы которых MISSING или REJECTED.
+- Разбивка по учреждениям охватывает организации-отправители и центрального получателя. Включайте каждую уникальную организацию-отправителя/получателя один раз на партию. `shipment_count` считает уникальные связанные партии, `completed_count` — партии, сейчас находящиеся в `COMPLETED` или `COMPLETED_WITH_ISSUES`, а `with_issues_count` — партии в `COMPLETED_WITH_ISSUES`.
+- Активные REGIONAL_ANALYST и REGIONAL_OPERATIONS могут читать только агрегаты. У сводки одно поле верхнего уровня `region_id`: определяйте его автоматически при ровно одном активном разрешённом регионе; требуйте разрешённый `region_id`, если их несколько. Необязательный фильтр организации только сужает результаты внутри региона.
+- Последовательность событий и аналитика на определённый момент не равнозначны: текущая панель v0.6.1 показывает **последнее состояние**, отчёты аудита — историю событий.
 
-## 6. New/relevant error codes
+## 6. Новые/значимые коды ошибок
 
-| Error | Meaning |
+| Ошибка | Значение |
 |---|---|
-| `CUSTODY_INCIDENT_REQUIRED` | Physical custody disputed; cannot perform ordinary cancellation/confirmation |
-| `EXCEPTIONAL_RECEIPT_NOT_READY` | Two attestations/authorization missing; no receipt transition |
-| `ATTESTATION_DUPLICATE_ACTOR` | Same user attesting twice in incident |
-| `PROPOSAL_NOT_WITHDRAWABLE` | Proposal not PENDING or actor not the original proposer |
-| `DELIVERY_DEADLINE_REQUIRED` / `DELIVERY_DEADLINE_INVALID` | Seal requires future deadline |
-| `PILOT_DESTINATION_INVALID` | Destination mismatch with configured central Lab |
-| `OFFLINE_REVIEW_REQUIRED` | Snapshot expired or action uncertain: no retroactive apply |
-| `OFFLINE_COMMAND_STALE` | Relevant state version changed; no automatic rebase |
-| `IDEMPOTENCY_KEY_REUSED` | Same Courier command ID with changed canonical request |
-| `NOTIFICATION_NOT_FOUND` | Notification outside caller's own Inbox (masked 404) |
+| `CUSTODY_INCIDENT_REQUIRED` | Физическая передача ответственности оспаривается; обычная отмена/подтверждение невозможны |
+| `EXCEPTIONAL_RECEIPT_NOT_READY` | Нет двух свидетельств/полномочий; переход к получению не выполняется |
+| `ATTESTATION_DUPLICATE_ACTOR` | Тот же пользователь свидетельствует в инциденте дважды |
+| `PROPOSAL_NOT_WITHDRAWABLE` | Предложение не PENDING либо исполнитель не первоначальный автор |
+| `DELIVERY_DEADLINE_REQUIRED` / `DELIVERY_DEADLINE_INVALID` | Запечатывание требует будущий срок |
+| `PILOT_DESTINATION_INVALID` | Получатель не совпадает с настроенной центральной лабораторией |
+| `OFFLINE_REVIEW_REQUIRED` | Снимок просрочен или действие неопределённо: применения задним числом нет |
+| `OFFLINE_COMMAND_STALE` | Значимая версия состояния изменилась; автоматического согласования нет |
+| `IDEMPOTENCY_KEY_REUSED` | Тот же ID команды курьера с изменённым каноническим запросом |
+| `NOTIFICATION_NOT_FOUND` | Уведомление вне собственных входящих вызывающего пользователя (скрывающий 404) |
 
-All state-changing endpoints require a stable Idempotency-Key except Courier batch sync where each command has client_command_id; GET requires none. Use 409 for business conflicts, 422 for invalid shape, scoped 403 or masked 404 for authorization. Exceptional endpoints are implemented; witness, scope and concurrency rules remain acceptance and regression requirements. See the [API guide](api.md) for the runtime contract boundary.
+Все изменяющие состояние конечные точки требуют стабильный Idempotency-Key, кроме пакетной синхронизации курьера, где каждая команда имеет client_command_id; GET его не требует. Используйте 409 для бизнес-конфликтов, 422 для неверной структуры, 403 с учётом области доступа или скрывающий 404 для авторизации. Исключительные конечные точки реализованы; правила свидетелей, области доступа и конкурентности остаются приёмочными и регрессионными требованиями. Границы контракта работающего приложения см. в [руководстве API](api.md).

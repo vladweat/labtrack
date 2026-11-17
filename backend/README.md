@@ -1,10 +1,10 @@
-# Backend development
+# Разработка серверной части
 
-The backend is a FastAPI modular monolith. Implemented modules cover scoped identity and organizations, Samples and Shipments, bilateral whole-Shipment Pickup, per-container Delivery, lab receiving and revisions, custody incidents and exceptional receipt, Courier offline sync, audit/idempotency, operations, analytics, and Inbox. PostgreSQL is authoritative for business state; Redis/Celery support best-effort notifications. User provisioning is operator-controlled through `python -m app.cli`.
+Сервер — модульный монолит на FastAPI. Реализованы пользователи и организации с ограничением области доступа, образцы и отправки, двусторонний забор всей отправки, доставка по контейнерам, лабораторная приёмка и исправления результатов, инциденты передачи и исключительная приёмка, синхронизация команд курьера после работы без сети, аудит и идемпотентность, операции, аналитика и входящие уведомления. PostgreSQL определяет состояние рабочих процессов; Redis/Celery обеспечивают уведомления без гарантии доставки. Учётные записи создаёт оператор через `python -m app.cli`.
 
-See the [architecture](../docs/architecture.md), [workflows](../docs/workflows.md), and [API guide](../docs/api.md) for a compact implementation overview.
+Краткий обзор реализации: [архитектура](../docs/architecture.md), [рабочие процессы](../docs/workflows.md), [руководство API](../docs/api.md).
 
-From this directory, create a virtual environment and install the project with development tools:
+В этом каталоге создайте виртуальное окружение и установите проект с инструментами разработки:
 
 ```bash
 python3.12 -m venv .venv
@@ -12,7 +12,7 @@ source .venv/bin/activate
 python -m pip install -e '.[dev]'
 ```
 
-Create the local environment file from the repository root if it does not exist, then start PostgreSQL:
+В корне репозитория создайте локальный файл окружения, если его ещё нет, и запустите PostgreSQL:
 
 ```bash
 cd ..
@@ -21,51 +21,33 @@ docker compose up -d postgres
 cd backend
 ```
 
-Apply database migrations explicitly before starting the API:
+Перед запуском API явно примените миграции:
 
 ```bash
 alembic upgrade head
 ```
 
-The `POSTGRES_USER` account owns the schema and is used by Alembic. The API uses
-`APP_POSTGRES_USER`/`APP_POSTGRES_PASSWORD`, which must be a non-owner role. A
-fresh Compose volume creates this restricted role from values in `.env`. For an
-existing volume, execute the SQL in `backend/database/init/10-runtime-role.sh`
-once through the PostgreSQL owner, then restart the API.
+Учётная запись `POSTGRES_USER` владеет схемой и используется Alembic. API использует `APP_POSTGRES_USER`/`APP_POSTGRES_PASSWORD`: эта роль не должна владеть схемой. При создании нового тома Compose создаёт ограниченную роль со значениями из `.env`. Для существующего тома один раз выполните SQL из `backend/database/init/10-runtime-role.sh` от имени владельца PostgreSQL, затем перезапустите API.
 
-Start the API from this directory:
+Запустите API из этого каталога:
 
 ```bash
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000 --no-proxy-headers
 ```
 
-The login limiter uses the ASGI transport peer as the source address by
-default. To honor `X-Real-IP`, configure
-`LOGIN_TRUSTED_PROXY_NETWORKS` with only the immediate proxy peer's pinned
-address, and make the edge overwrite the header after validating the client
-address. The limiter never reads `X-Forwarded-For`. Keep Uvicorn's
-`--no-proxy-headers`; proxy middleware can rewrite `request.client.host` before
-the limiter checks the peer.
+По умолчанию ограничитель попыток входа использует адрес непосредственного транспортного узла из ASGI. Чтобы учитывать `X-Real-IP`, задайте в `LOGIN_TRUSTED_PROXY_NETWORKS` только закреплённый адрес непосредственного прокси и настройте пограничный прокси на перезапись заголовка после проверки адреса клиента. Ограничитель никогда не читает `X-Forwarded-For`. Сохраняйте `--no-proxy-headers` в Uvicorn: обработка прокси-заголовков может подменить `request.client.host` до проверки узла ограничителем.
 
-The API Dockerfiles in this repository use `--no-proxy-headers`. The public
-deployment Compose file and active edge configuration are not available in
-this checkout, so deployment command-line flags, proxy header behavior, and
-API network exposure have not been verified. Keep
-`LOGIN_TRUSTED_PROXY_NETWORKS` empty until the deployment is checked against
-the requirements in [the deployment guide](../docs/deploy.md). With the
-default, clients behind a shared proxy will share a rate-limit bucket.
+Dockerfile API в этом репозитории используют `--no-proxy-headers`. Файл Compose публичного развёртывания и активная конфигурация пограничного прокси недоступны в этой рабочей копии. Поэтому параметры запуска, обработка заголовков и доступность API по сети не проверены. Оставьте `LOGIN_TRUSTED_PROXY_NETWORKS` пустым до проверки развёртывания по [руководству](../docs/deploy.md). По умолчанию клиенты за общим прокси используют один счётчик ограничения попыток входа.
 
-Failed-login limits are process-local and default to 30 failures per source in
-900 seconds. Restarts clear the counters, and each worker or replica has its
-own counters; this is not distributed enforcement.
+Ограничения неудачных входов действуют в пределах процесса: по умолчанию 30 ошибок на источник за 900 секунд. Перезапуск сбрасывает счётчики; у каждого процесса и реплики собственные счётчики. Распределённое ограничение не обеспечивается.
 
-The liveness endpoint is `http://127.0.0.1:8000/health/live`; readiness is `http://127.0.0.1:8000/health/ready` and returns 503 if PostgreSQL is unavailable. The auth routes are under `/api/v1/auth`; `POST /token` accepts a JSON email/password body and returns a short-lived Bearer token, while `GET /me` reloads the active user and memberships from PostgreSQL. Account creation and membership grants are operator-only CLI operations; there is no public administrator endpoint.
+Проверка работоспособности доступна по `http://127.0.0.1:8000/health/live`; проверка готовности — по `http://127.0.0.1:8000/health/ready` и возвращает 503 при недоступном PostgreSQL. Маршруты аутентификации находятся под `/api/v1/auth`: `POST /token` принимает JSON с электронной почтой и паролем и возвращает краткоживущий токен Bearer; `GET /me` заново загружает активного пользователя и его роли из PostgreSQL. Создание учётных записей и выдача ролей доступны только оператору через CLI; публичного административного маршрута нет.
 
-### Provision users and memberships
+### Создание пользователей и выдача ролей
 
-Run commands from `backend/` after configuring `.env` and applying migrations. The operator needs the backend environment and database connection; no password is passed in shell history or process arguments.
+Выполняйте команды из `backend/` после настройки `.env` и применения миграций. Оператору нужны серверное окружение и подключение к БД; пароль не передаётся в аргументах процесса и истории команд.
 
-Create the first laboratory manager:
+Создайте первого руководителя лаборатории:
 
 ```bash
 python -m app.cli provision-user \
@@ -75,9 +57,9 @@ python -m app.cli provision-user \
   --organization-code CENTRAL_LAB
 ```
 
-The command prompts twice for an initial password without echoing it. Passwords must be 12–256 characters. Organization roles are `SENDER_OPERATOR`, `LAB_OPERATOR`, and `LAB_MANAGER`; region roles are `COURIER`, `REGIONAL_OPERATIONS`, and `REGIONAL_ANALYST`.
+Команда дважды запросит начальный пароль без отображения ввода. Допустимая длина — 12–256 символов. Организационные роли: `SENDER_OPERATOR`, `LAB_OPERATOR`, `LAB_MANAGER`; региональные: `COURIER`, `REGIONAL_OPERATIONS`, `REGIONAL_ANALYST`.
 
-Add another role or scope to an existing user:
+Добавьте роль или область доступа существующему пользователю:
 
 ```bash
 python -m app.cli grant-membership \
@@ -86,21 +68,15 @@ python -m app.cli grant-membership \
   --region-code PILOT
 ```
 
-Each command validates that the selected scope exists and is active, checks that the role matches the scope type and organization kind, and commits the account/membership change as one transaction. `SENDER_OPERATOR` requires a `HEALTHCARE_FACILITY`; `LAB_OPERATOR` and `LAB_MANAGER` require a `LABORATORY`. Existing email and duplicate membership grants are rejected. Provisioning does not create organizations or regions; those records must already exist.
+Каждая команда проверяет, что выбранная область существует и активна, а роль соответствует типу области и организации, затем фиксирует изменения учётной записи и роли одной транзакцией. Для `SENDER_OPERATOR` нужна организация типа `HEALTHCARE_FACILITY`; для `LAB_OPERATOR` и `LAB_MANAGER` — `LABORATORY`. Существующая электронная почта и повторная выдача роли отклоняются. Команды не создают организации и регионы: эти записи должны существовать заранее.
 
-The separate `seed-demo` command creates only synthetic Sender, Courier, Lab,
-and Shipment data. It requires `APP_ENV=demo`, `DEMO_SEED_ENABLED=true`, and a
-database name containing `demo` or `test`; see the
-[demo deployment guide](../docs/deploy.md) for the isolated local setup and
-reset procedure. The separate local-only PostgreSQL backup/restore drill and
-its recovery limits are documented in the
-[backup/restore guide](../docs/backup-restore.md).
+Отдельная команда `seed-demo` создаёт только синтетические данные отправителя, курьера, лаборатории и отправки. Нужны `APP_ENV=demo`, `DEMO_SEED_ENABLED=true` и имя БД, содержащее `demo` или `test`. Изолированный локальный запуск и сброс описаны в [руководстве демонстрации](../docs/deploy.md). Отдельная локальная проверка резервного копирования и восстановления PostgreSQL и её ограничения описаны в [руководстве восстановления](../docs/backup-restore.md).
 
-JWT roles are not embedded in tokens. Protected use cases must use `Principal`/`require_roles` and verify the active organization or region scope against the target resource. A role match by itself is not an ownership check. Redis is not required for readiness or authentication.
+Роли не включаются в JWT. Защищённые операции должны использовать `Principal`/`require_roles` и проверять активную область организации или региона относительно целевого ресурса. Совпадение роли само по себе не подтверждает владение ресурсом. Redis не требуется для готовности или аутентификации.
 
-Useful static checks are `ruff check .`, `ruff format --check .`, and `python -m compileall -q app alembic tests`.
+Полезные статические проверки: `ruff check .`, `ruff format --check .`, `python -m compileall -q app alembic tests`.
 
-Prepare a dedicated test database and runtime role; the suite truncates test rows before each test and refuses to run without an explicit test-database name and opt-in flag:
+Подготовьте отдельную тестовую БД и роль приложения. Набор тестов очищает тестовые строки перед каждым тестом и отказывается запускаться без явно заданного имени тестовой БД и разрешающего флага:
 
 ```bash
 docker compose exec -T postgres createdb -U labtrack labtrack_test
@@ -108,8 +84,6 @@ docker compose exec -T -e POSTGRES_DB=labtrack_test postgres /docker-entrypoint-
 LABTRACK_TESTING=1 POSTGRES_DB=labtrack_test pytest -q
 ```
 
-Set `APP_POSTGRES_USER` and `APP_POSTGRES_PASSWORD` for the API test connection;
-the owner credentials stay in `POSTGRES_USER` and `POSTGRES_PASSWORD` for
-migrations and isolated cleanup.
+Задайте `APP_POSTGRES_USER` и `APP_POSTGRES_PASSWORD` для подключения API в тестах; учётные данные владельца остаются в `POSTGRES_USER` и `POSTGRES_PASSWORD` для миграций и изолированной очистки.
 
-The CI job checks Ruff lint and format, Python compilation, migration upgrade/drift/downgrade/upgrade, and the full pytest suite against PostgreSQL 15.
+Задача CI проверяет правила и форматирование Ruff, компиляцию Python, применение миграций, расхождение схемы, откат и повторное применение, а также полный набор pytest на PostgreSQL 15.

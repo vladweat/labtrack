@@ -1,41 +1,41 @@
-# LabTrack v0.5 — Courier Offline Sync Protocol
+# LabTrack v0.5 — Протокол синхронизации действий курьера без сети
 
-> **Исторический документ (до v0.6).** Приоритет имеют [Decisions v0.6](15-decisions-v06.md), [Domain v0.6](16-domain-workflows-v06.md), [Data Model v0.6](17-data-model-v06.md), [API v0.6](18-api-v06.md). Этот текст может содержать устаревшие all-or-nothing handoff и unilateral resolution; не использовать его как актуальный контракт.
+> **Исторический документ (до v0.6).** Приоритет имеют [Решения v0.6](15-decisions-v06.md), [Доменная модель v0.6](16-domain-workflows-v06.md), [Модель данных v0.6](17-data-model-v06.md), [API v0.6](18-api-v06.md). Этот текст может содержать устаревшие правила передачи всей партии по принципу «всё или ничего» и одностороннего разрешения проблем; не использовать его как актуальный контракт.
 
-**Status:** proposed technical contract for the product-approved courier offline queue.  
-**Related:** [Domain rules](10-domain-hardening-v05.md), [Data Model v0.5](12-data-model-v05.md), [REST API v0.5](13-api-v05.md).
+**Статус:** предлагаемый технический контракт для утверждённой продуктом очереди действий курьера без сети.
+**Связанные документы:** [Доменные правила](10-domain-hardening-v05.md), [Модель данных v0.5](12-data-model-v05.md), [REST API v0.5](13-api-v05.md).
 
-## 1. Scope and invariants
+## 1. Границы и инварианты
 
-**Offline-first is enabled only for the Courier client**, not for Sender, Lab or Regional Operations in MVP.
+**Работа с приоритетом автономного режима включена только для клиента курьера**, а не отправителя, лаборатории или региональных операторов в MVP.
 
-Supported offline commands:
-- `COURIER_CONFIRM_PICKUP` (second part of sender → courier handoff);
-- `COURIER_CONFIRM_DELIVERY` (first part of courier → lab handoff).
+Поддерживаемые команды без сети:
+- `COURIER_CONFIRM_PICKUP` (вторая часть передачи отправитель → курьер);
+- `COURIER_CONFIRM_DELIVERY` (первая часть передачи курьер → лаборатория).
 
-The client may scan QR codes and prepare commands offline; it may **not** unilaterally finalize a handoff, mutate Server Shipment state, or auto-accept individual samples. The UI must clearly display `PENDING_SYNC` until server acknowledgement.
+Клиент может сканировать QR-коды и готовить команды без сети; он **не может** единолично завершать передачу, менять серверное состояние Shipment или автоматически принимать отдельные пробирки. До подтверждения сервера интерфейс должен явно показывать `PENDING_SYNC`.
 
-The source of truth is server PostgreSQL. A claim that an offline command was performed at time T is an **untrusted device report**; authoritative `recorded_at` is the server DB time at successful sync. Device clock changes and duplicated submission must not alter the server timeline.
+Источник истины — серверный PostgreSQL. Утверждение, что команда без сети выполнена во время T, — **недоверенное сообщение устройства**; достоверное `recorded_at` — время серверной БД при успешной синхронизации. Изменение часов устройства и повторная отправка не должны менять серверную хронологию.
 
-## 2. Courier client storage and session
+## 2. Хранилище и сеанс клиента курьера
 
-Recommended minimal PWA:
-- Service worker for application shell only.
-- IndexedDB stores scoped manifests for currently assigned shipments and durable queue entries, **no JWT or passwords** and no patient data.
-- Manifest cache: `shipment_id, manifest_revision/version, status_at_download, container_codes, expected_delivery_at, cached_at`; only after successful authorized online fetch.
-- Queue entry: `client_command_id UUID, shipment_id UUID, action, container_codes[], expected_manifest_version, client_performed_at, queued_at, local_status, attempts`.
-- `client_command_id` is generated **once** per user action and preserved across retries. The queue is not cleared until the client has persisted the authoritative result.
-- On logout/account switch: delete local manifests, commands and derived state; prevent one Courier from seeing another's queue.
-- Offline device security: HTTPS, tight CSP, XSS protection, minimal local data, storage quota and expiry policy. IndexedDB does not guarantee encryption at rest on every device. For deployment on actual shared devices an additional security review is mandatory.
-- If JWT expires while offline, actions can remain queued but **are not trusted**; user must reauthenticate before synchronization. Do not embed access token in queued payload.
+Рекомендуемое минимальное PWA:
+- Service worker только для оболочки приложения.
+- IndexedDB хранит манифесты текущих назначенных партий с учётом области доступа и устойчивые записи очереди, **без JWT и паролей**, без данных пациентов.
+- Кэш манифеста: `shipment_id, manifest_revision/version, status_at_download, container_codes, expected_delivery_at, cached_at`; заполняется только после успешного авторизованного получения через сеть.
+- Запись очереди: `client_command_id UUID, shipment_id UUID, action, container_codes[], expected_manifest_version, client_performed_at, queued_at, local_status, attempts`.
+- `client_command_id` создаётся **один раз** на действие пользователя и сохраняется при повторах. Очередь не очищается, пока клиент не сохранил достоверный результат.
+- При выходе/смене учётной записи удалить локальные манифесты, команды и производное состояние; исключить доступ одного курьера к очереди другого.
+- Безопасность устройства без сети: HTTPS, строгая CSP, защита от XSS, минимум локальных данных, квота хранилища и политика срока хранения. IndexedDB не гарантирует шифрование хранимых данных на каждом устройстве. Для реальных общих устройств обязательна дополнительная проверка безопасности.
+- Если JWT истёк без сети, действия могут остаться в очереди, но **не считаются доверенными**; перед синхронизацией пользователь должен снова аутентифицироваться. Не включать токен доступа в данные команды очереди.
 
-**Default proposal, not approved product policy:** show a warning after 24h without synchronization and route to manual review. Do not auto-confirm or auto-delete an unacknowledged command solely due to age. Device backlog can be pruned only after definitive server acknowledgement or explicit user/admin intervention with audit.
+**Предложение по умолчанию, не утверждённая продуктовая политика:** после 24 часов без синхронизации показать предупреждение и направить на ручную проверку. Не подтверждать и не удалять неподтверждённую команду автоматически только из-за возраста. Удалять накопленные команды можно лишь после окончательного подтверждения сервера либо явного вмешательства пользователя/администратора с аудитом.
 
-## 3. Synchronization endpoint
+## 3. Маршрут синхронизации
 
-`POST /api/v1/courier/sync` (authenticated, Bearer JWT). No separate batch-wide idempotency key is necessary: **each command contains an immutable `client_command_id`**, reused as its server idempotency key.
+`POST /api/v1/courier/sync` (с аутентификацией, Bearer JWT). Отдельный ключ идемпотентности для всего пакета не нужен: **каждая команда содержит неизменяемый `client_command_id`**, который используется как её серверный ключ идемпотентности.
 
-Request:
+Запрос:
 
 ```json
 {
@@ -52,17 +52,17 @@ Request:
 }
 ```
 
-**API design rules:**
-- Maximum 20 commands per batch, maximum 50 distinct container codes per command (**proposed operational limits**).
-- Validate syntactic format before processing. Duplicate `client_command_id` with divergent payload inside one batch returns 422 for the batch.
-- Per-command atomicity: process commands in supplied order and persist **each** one in a separate PostgreSQL transaction. A later failure must **not** roll back an earlier successful action. The response contains a result for each submitted command.
-- To avoid ambiguous ordering across requests, client must not concurrently sync the same Shipment queue from multiple browser tabs. Server still detects races via Shipment lock; do not depend on client discipline alone.
-- Before processing a command, authenticate current user, verify active COURIER membership in the Shipment region, assigned `courier_user_id`, current state, referenced manifest codes, and user authorization.
-- `expected_manifest_version` identifies the sealed manifest snapshot, **not** the mutable `Shipment.version` (which increments during handoff). Introduce stable `manifest_revision` or `manifest_digest` fixed at seal; a sequence of valid handoff operations must not self-conflict due to Shipment.version changes.
-- When a manifest mismatch or stale authorization exists, reject the command rather than silently rebasing.
-- Batch response is `200` if schema and authentication succeeded, even when some individual commands conflict. Never report full success if only some applied.
+**Правила проектирования API:**
+- Не более 20 команд в пакете и 50 разных кодов контейнеров в команде (**предлагаемые операционные ограничения**).
+- До обработки проверить синтаксический формат. Повтор `client_command_id` с разными данными внутри пакета даёт 422 для всего пакета.
+- Атомарность на уровне команды: обрабатывать в указанном порядке, сохраняя **каждую** команду в отдельной транзакции PostgreSQL. Последующая ошибка **не должна** откатывать предыдущее успешное действие. Ответ содержит результат каждой переданной команды.
+- Чтобы избежать неоднозначного порядка между запросами, клиент не должен одновременно синхронизировать очередь одного Shipment из нескольких вкладок. Сервер всё равно обнаруживает гонки блокировкой Shipment; нельзя полагаться лишь на дисциплину клиента.
+- Перед обработкой аутентифицировать текущего пользователя, проверить активное членство COURIER в регионе Shipment, назначение `courier_user_id`, текущее состояние, коды из манифеста и полномочия пользователя.
+- `expected_manifest_version` идентифицирует снимок запечатанного манифеста, **а не** изменяемый `Shipment.version` (увеличиваемый при передачах). Ввести стабильный `manifest_revision` или `manifest_digest`, фиксируемый при запечатывании; последовательность допустимых передач не должна конфликтовать сама с собой из-за изменений Shipment.version.
+- При несовпадении манифеста или устаревших полномочиях отклонить команду, не адаптировать её незаметно к новому состоянию.
+- Пакетный ответ — `200`, если схема и аутентификация корректны, даже при конфликтах отдельных команд. Не сообщать о полном успехе, если применена лишь часть команд.
 
-Response:
+Ответ:
 
 ```json
 {
@@ -79,53 +79,53 @@ Response:
 }
 ```
 
-Per-command `outcome`:
-- `APPLIED`: first successful commit, matching current state;
-- `ALREADY_APPLIED`: exact replay of the same `client_command_id` and request payload; return the original authoritative recorded result;
-- `REJECTED`: no mutation; include deterministic error object (`INVALID_STATE`, `MANIFEST_MISMATCH`, `FORBIDDEN`, `IDEMPOTENCY_KEY_REUSED`);
-- `RETRYABLE`: no confirmed commit, transient infrastructure failure; retry **same** ID after backoff/re-auth.
+`outcome` отдельной команды:
+- `APPLIED`: первая успешная фиксация, соответствующая текущему состоянию;
+- `ALREADY_APPLIED`: точный повтор того же `client_command_id` и данных запроса; вернуть исходный достоверный сохранённый результат;
+- `REJECTED`: изменений нет; включить детерминированный объект ошибки (`INVALID_STATE`, `MANIFEST_MISMATCH`, `FORBIDDEN`, `IDEMPOTENCY_KEY_REUSED`);
+- `RETRYABLE`: подтверждённой фиксации нет, временный сбой инфраструктуры; повторить с **тем же** ID после задержки/повторной аутентификации.
 
-**Commit uncertainty:** if network fails after a commit but before response, client retains command PENDING_SYNC and retries its unchanged `client_command_id`; server returns ALREADY_APPLIED. Never generate a new ID for a retry.
+**Неопределённость фиксации:** при обрыве сети после фиксации, но до ответа клиент сохраняет команду PENDING_SYNC и повторяет её с неизменным `client_command_id`; сервер возвращает ALREADY_APPLIED. Никогда не создавать новый ID для повторной попытки.
 
-## 4. Server-side idempotency and lock order
+## 4. Серверная идемпотентность и порядок блокировок
 
-Reuse `idempotency_records` with unique `(actor_id,operation,key)`. **For every Courier offline command use the same `operation='courier_offline_command'` and `key=client_command_id`, regardless of the underlying action or Shipment.** Compute `request_hash` over canonical `shipment_id`, `action`, `container_codes`, `expected_manifest_version` and `client_performed_at`. This ensures the same ID with a different action/Shipment/payload returns `IDEMPOTENCY_KEY_REUSED` instead of creating a second command.
+Повторно использовать `idempotency_records` с уникальностью `(actor_id,operation,key)`. **Для каждой команды курьера без сети использовать одинаковый `operation='courier_offline_command'` и `key=client_command_id` независимо от действия или Shipment.** Вычислять `request_hash` по каноническим `shipment_id`, `action`, `container_codes`, `expected_manifest_version` и `client_performed_at`. Тогда тот же ID с другим действием/Shipment/данными даёт `IDEMPOTENCY_KEY_REUSED`, а не вторую команду.
 
-Always:
-1. Begin transaction; reserve/check idempotency record (unique index).
-2. Check active actor/authorization; lock parent Shipment FOR UPDATE.
-3. Verify state, manifest_revision, sorted/deduped scanned container codes, and handoff actor separation.
-4. Apply transition + handoff update + audit event, save response in the same transaction, commit.
-5. Return recorded result. Only then optional Celery best-effort notification.
+Всегда:
+1. Начать транзакцию; зарезервировать/проверить запись идемпотентности (уникальный индекс).
+2. Проверить активность исполнителя/полномочия; заблокировать родительский Shipment через FOR UPDATE.
+3. Проверить состояние, manifest_revision, отсортированные и очищенные от дублей коды сканированных контейнеров и различие участников передачи.
+4. Применить переход, обновление передачи и событие аудита; сохранить ответ в той же транзакции и зафиксировать её.
+5. Вернуть сохранённый результат. Только затем — необязательное уведомление Celery без гарантии доставки.
 
-**Record both** `client_performed_at` (claimed and untrusted) and `recorded_at` (server). They must never be confused in custody history. Response replay and client queue cleanup are safe even if notifications are lost.
+**Записывать обе метки:** `client_performed_at` (заявленная, недоверенная) и `recorded_at` (серверная). Их нельзя смешивать в истории ответственности. Повтор ответа и очистка очереди безопасны даже при потере уведомлений.
 
-If the queue contains pickup and delivery for the same shipment, process them sequentially. Delivery can succeed only after Pickup has already been committed to IN_TRANSIT; if state is not ready, reject/keep action for explicit user review, never silently force preceding transitions.
+Если в очереди есть забор и доставка одной партии, обрабатывать их последовательно. Доставка успешна лишь после фиксации забора в IN_TRANSIT; если состояние ещё не готово, отклонить/оставить действие для явной проверки пользователем, не выполнять предшествующие переходы принудительно и незаметно.
 
-For normal online endpoints and sync, the **same application commands** must be used, not duplicate state machine implementations.
+Обычные сетевые маршруты и синхронизация должны использовать **одни прикладные команды**, без дублирующих реализаций автомата состояний.
 
-## 5. Failure / conflict matrix
+## 5. Матрица сбоев и конфликтов
 
-| Scenario | Server behavior | Client behavior |
+| Сценарий | Поведение сервера | Поведение клиента |
 |---|---|---|
-| Offline Courier scans all containers but Sender has not confirmed release | `REJECTED INVALID_STATE` | Show conflict; manual action required |
-| Sender confirmed release; Courier submits valid pickup | APPLIED, IN_TRANSIT | Mark complete after response |
-| Courier sends delivery while pending pickup not synced | REJECTED INVALID_STATE | Keep flagged, retry only after user review / sync pickup |
-| Lab attempts receipt before Courier delivery sync | Lab API returns 409 INVALID_STATE | Lab waits for visible server delivery event |
-| Same client_command_id retried with identical request | ALREADY_APPLIED, same recorded result | Drop persisted queue record safely |
-| Same ID retried with different action/container list | REJECTED IDEMPOTENCY_KEY_REUSED | Never silently substitute payload |
-| Courier account deactivated during offline interval | REJECTED FORBIDDEN / 401 after re-auth | Do not apply stale action |
-| Shipment enters DELIVERY_BLOCKED while command is offline | REJECTED INVALID_STATE | Show manual resolution path |
-| Container codes do not match sealed manifest | REJECTED MANIFEST_MISMATCH | Re-scan / contact operations |
-| HTTP timeout after commit | Replayed result on retry | Preserve same ID; no duplicate event |
-| JWT expires offline | HTTP 401, no processing | Re-login, then retry same command IDs |
-| Device clock wrong | No change to server timestamp | Show server time and optional device estimate separately |
-| Redis/Celery unavailable | Business command may still commit | No misleading transaction failure due to notification |
+| Курьер без сети сканирует все контейнеры, но отправитель не подтвердил выдачу | `REJECTED INVALID_STATE` | Показать конфликт; требуется ручное действие |
+| Отправитель подтвердил выдачу; курьер отправляет допустимый забор | APPLIED, IN_TRANSIT | Отметить завершённым после ответа |
+| Курьер отправляет доставку до синхронизации ожидающего забора | REJECTED INVALID_STATE | Сохранить с отметкой; повторять лишь после проверки пользователем / синхронизации забора |
+| Лаборатория пытается принять до синхронизации доставки курьером | API лаборатории возвращает 409 INVALID_STATE | Лаборатория ждёт видимого серверного события доставки |
+| Повтор того же client_command_id с идентичным запросом | ALREADY_APPLIED, тот же сохранённый результат | Безопасно удалить сохранённую запись очереди |
+| Тот же ID с другим действием/списком контейнеров | REJECTED IDEMPOTENCY_KEY_REUSED | Никогда незаметно не подменять данные |
+| Учётная запись курьера деактивирована за время без сети | REJECTED FORBIDDEN / 401 после повторной аутентификации | Не применять устаревшее действие |
+| Пока команда без сети, Shipment переходит в DELIVERY_BLOCKED | REJECTED INVALID_STATE | Показать путь ручного разрешения |
+| Коды контейнеров не совпадают с запечатанным манифестом | REJECTED MANIFEST_MISMATCH | Повторить сканирование / связаться с операционными сотрудниками |
+| Тайм-аут HTTP после фиксации | Сохранённый ответ при повторе | Сохранить тот же ID; без повторного события |
+| JWT истёк без сети | HTTP 401, без обработки | Снова войти, повторить с теми же ID команд |
+| Неверные часы устройства | Серверная временная метка не меняется | Раздельно показывать серверное время и необязательную оценку устройства |
+| Redis/Celery недоступен | Бизнес-команда всё равно может быть зафиксирована | Не показывать ложную ошибку транзакции из-за уведомления |
 
-## 6. Observability and E2E tests
+## 6. Наблюдаемость и сквозные тесты
 
-Metrics: queued commands per active Courier (client local only), sync latency, sync conflicts by code, number of REJECTED/RETRYABLE, duplicate replays, longest pending age, stalled handoff count.
+Метрики: число команд очереди на активного курьера (только локально на клиенте), задержка синхронизации, конфликты по коду, число REJECTED/RETRYABLE, точные повторы, максимальный возраст ожидания, число зависших передач.
 
-Required integration tests: identical replay after server commit with lost HTTP response, concurrent sync/online pickup for same shipment, multiple queued actions in one batch with second conflict, stale manifest revision, stolen/expired token, revoked Courier membership, duplicate IDs with changed body, wrong container set, local queue surviving page reload, different-user logout purge.
+Обязательные интеграционные тесты: точный повтор после серверной фиксации с потерянным HTTP-ответом; одновременный забор через синхронизацию и обычный маршрут одной партии; несколько действий в пакете с конфликтом второго; устаревшая версия манифеста; украденный/истёкший токен; отозванное членство курьера; повтор ID с другим телом; неверный набор контейнеров; сохранение локальной очереди после перезагрузки страницы; очистка при выходе другого пользователя.
 
-**Not in MVP:** offline Lab acceptance, offline Sender release, conflict-free replicated data types, cross-device queue reconciliation, device certification, legally reliable offline-signature timestamps or physical GPS.
+**Вне MVP:** приёмка лаборатории без сети, выдача отправителя без сети, бесконфликтные реплицируемые типы данных, согласование очереди между устройствами, сертификация устройств, юридически достоверное время подписи без сети или физическое GPS-отслеживание.

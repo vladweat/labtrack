@@ -1,6 +1,6 @@
-# Database migrations
+# Миграции базы данных
 
-Alembic uses the async SQLAlchemy URL from the repository-root `.env`. The first revision creates regions, organizations, users, and scoped memberships for identity and access-control foundations. Keep revisions in `versions/`; apply them as an explicit command rather than on API or worker startup.
+Alembic использует асинхронный URL подключения SQLAlchemy из `.env` в корне репозитория. Первая миграция создаёт регионы, организации, пользователей и роли с привязкой к области доступа. Храните миграции в `versions/`; применяйте их отдельной командой перед запуском API или фонового обработчика.
 
 ```bash
 cd backend
@@ -8,4 +8,4 @@ alembic upgrade head
 alembic current
 ```
 
-CI applies the migration to a disposable PostgreSQL 15 service. Do not use SQLite as a substitute for PostgreSQL constraint, locking, or concurrency verification.
+CI применяет миграции к одноразовому PostgreSQL 15. SQLite не заменяет проверку ограничений, блокировок и конкурентного доступа PostgreSQL.

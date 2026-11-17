@@ -1,82 +1,82 @@
-# LabTrack v0.6.1 — PostgreSQL Delta & Integrity Rules
+# LabTrack v0.6.1 — изменения PostgreSQL и правила целостности
 
-**Scope:** PostgreSQL model and integrity requirements for v0.6.1, not a current schema dump or ERD. The current backend includes custody incidents and receipt evidence, receiving revisions, Courier offline replay, Inbox/operations, role-scoped workspaces, and target-scoped idempotency through migration `0011_http_request_scope`. Check the current migrations and models for exact schema. Preserve Shipment-first locking, partial receiving, and sealed-manifest integrity. Approved changes: [20-decisions-v061.md](20-decisions-v061.md).
+**Область действия:** требования к модели PostgreSQL и целостности для v0.6.1, а не выгрузка текущей схемы или ER-диаграмма. Текущая серверная часть включает инциденты передачи ответственности и свидетельства получения, исправления приёмки, повторное выполнение офлайн-команд курьера, входящие уведомления и операции, рабочие области по ролям и идемпотентность с учётом целевого ресурса до миграции `0011_http_request_scope` включительно. Точную схему см. в текущих миграциях и моделях. Сохраняйте порядок блокировки с партией первой, частичную приёмку и целостность запечатанного манифеста. Утверждённые изменения: [20-decisions-v061.md](20-decisions-v061.md).
 
-## 1. New tables (proposed physical mapping)
+## 1. Новые таблицы (предлагаемое физическое отображение)
 
-| Table | Core columns | Invariant |
+| Таблица | Основные столбцы | Инвариант |
 |---|---|---|
-| `custody_incidents` | id, shipment_id, container_id NULL, handoff_id NULL, phase, kind, status, reason, opened_by/at, resolved_by/at NULL, resolution NULL | Scoped incident and human review; **not** a third MISSING/REJECTED type |
-| `custody_attestations` | id, incident_id, user_id, org_id_at_time, role_at_time, container_code NULL, statement, physically_present NULL, physical_release_occurred NULL, containers_at_origin NULL, recorded_at | Unique (incident_id,user_id); append-only; one account counts once. Pickup attestation has origin facts; Delivery attestation asserts personal physical presence |
-| `container_receipt_evidence` | id, container_id, method NORMAL|EXCEPTIONAL, handoff_id NULL, incident_id NULL, verified_at/by | Exactly one verified receipt per container; method-specific FK shape (XOR) |
-| `courier_manifest_snapshots` | id, actor_user_id, assigned_courier_user_id, shipment_id, region_id, manifest_revision, pickup_state_version, issued_at, policy_version, container_payload | Immutable server time and PHI-free manifest/version payload, bound to actor, current assignment, Shipment and region |
-| `offline_command_tombstones` | actor_user_id, client_command_id, request_hash, original_outcome, recorded_at, audit_event_id, replay_response | Unique actor+command ID; deliberately no user FK, so deleting an actor cannot release the ID; immutable across replay compaction |
-| `notifications` | id, recipient_user_id, event_id, type, payload JSONB, created_at, read_at NULL | Personal inbox, idempotent natural key (recipient_user_id,event_id,type) |
+| `custody_incidents` | id, shipment_id, container_id NULL, handoff_id NULL, phase, kind, status, reason, opened_by/at, resolved_by/at NULL, resolution NULL | Инцидент с ограниченной областью доступа и рассмотрением человеком; **не** третий тип MISSING/REJECTED |
+| `custody_attestations` | id, incident_id, user_id, org_id_at_time, role_at_time, container_code NULL, statement, physically_present NULL, physical_release_occurred NULL, containers_at_origin NULL, recorded_at | Уникальная пара (incident_id,user_id); только добавление; одна учётная запись учитывается один раз. Свидетельство забора содержит факты со стороны отправителя; свидетельство доставки подтверждает личное физическое присутствие |
+| `container_receipt_evidence` | id, container_id, method NORMAL|EXCEPTIONAL, handoff_id NULL, incident_id NULL, verified_at/by | Ровно одно проверенное свидетельство получения на контейнер; структура внешних ключей зависит от метода (XOR) |
+| `courier_manifest_snapshots` | id, actor_user_id, assigned_courier_user_id, shipment_id, region_id, manifest_revision, pickup_state_version, issued_at, policy_version, container_payload | Неизменяемые серверное время и содержимое манифеста/версий без персональных медицинских данных, привязанные к исполнителю, текущему назначению, партии и региону |
+| `offline_command_tombstones` | actor_user_id, client_command_id, request_hash, original_outcome, recorded_at, audit_event_id, replay_response | Уникальная пара исполнитель+ID команды; намеренно без внешнего ключа пользователя, чтобы удаление исполнителя не освобождало ID; неизменяемость при сокращении данных повторного выполнения |
+| `notifications` | id, recipient_user_id, event_id, type, payload JSONB, created_at, read_at NULL | Личные входящие уведомления, идемпотентный естественный ключ (recipient_user_id,event_id,type) |
 
-For the full 90-day detailed replay, `idempotency_records` stores the canonical `request_hash`, response, `offline_retention_expires_at`, and optional causal metadata. Compaction removes expired detailed response/causal data while retaining the tombstone's minimal outcome and identity. Avoid reusing a command ID after detail expires.
+Для полного подробного повторного выполнения в течение 90 дней `idempotency_records` хранит канонический `request_hash`, ответ, `offline_retention_expires_at` и необязательные метаданные причинных связей. Сокращение удаляет просроченные подробные ответы и данные причинных связей, сохраняя минимальный результат и идентичность в записи-маркере. Не используйте ID команды повторно после истечения срока хранения подробностей.
 
-**Receipt evidence (OPEN-01–03 APPROVED):** use partial/composite FK and protected service invariants: NORMAL requires a confirmed DELIVERY Handoff of that container; EXCEPTIONAL requires a previously CONFIRMED whole-Shipment Pickup, **resolved incident**, two physically present, authenticated **distinct destination-laboratory employees** as witnesses with **at least one active LAB_MANAGER**, and a **REGIONAL_OPERATIONS administrative finalizer who is not a witness**. One verified receipt evidence per container, immutable. Verify current actor memberships and physical-presence attestations under Shipment lock with audit; DB FKs alone cannot attest human physical presence.
+**Свидетельство получения (OPEN-01–03 УТВЕРЖДЕНЫ):** используйте частичные/составные внешние ключи и защищённые инварианты сервисного слоя: NORMAL требует подтверждённую передачу DELIVERY этого контейнера; EXCEPTIONAL требует ранее CONFIRMED забора всей партии, **разрешённого инцидента**, двух физически присутствующих, аутентифицированных **разных сотрудников целевой лаборатории** в качестве свидетелей, **хотя бы одного с активной ролью LAB_MANAGER**, и **административного завершения сотрудником REGIONAL_OPERATIONS, который не является свидетелем**. На контейнер — одно проверенное неизменяемое свидетельство получения. Проверяйте текущие назначения прав исполнителей и заявления о физическом присутствии под блокировкой партии с аудитом; одни внешние ключи БД не могут подтвердить физическое присутствие человека.
 
-## 2. Existing schema deltas
+## 2. Изменения существующей схемы
 
 ### `handoffs`
-- Status CHECK adds `SUPERSEDED` only for pending Delivery replaced by exceptional receipt; never rewrite confirmed handoff. Keep immutable old actors/timestamps.
-- Add needed `superseded_by_incident_id`, `superseded_at` and reason, mutually consistent with status.
-- Preserve per-container uniqueness of active pending/confirmed Delivery Handoff; SUPERSEDED is terminal and allows new attempt only when policy authorizes one.
+- Ограничение CHECK статуса добавляет `SUPERSEDED` только для ожидающей доставки, заменённой исключительной приёмкой; никогда не переписывайте подтверждённую передачу. Сохраняйте неизменными прежних исполнителей и отметки времени.
+- Добавьте необходимые `superseded_by_incident_id`, `superseded_at` и причину, согласованные со статусом.
+- Сохраняйте уникальность активной ожидающей/подтверждённой передачи доставки для каждого контейнера; SUPERSEDED — конечный статус, допускающий новую попытку только с разрешения политики.
 
 ### `container_issue_resolution_proposals`
-- Existing PENDING/APPROVED/REJECTED/WITHDRAWN status enumeration retained.
-- Add `withdrawn_by UUID NULL`, `withdrawn_at TIMESTAMPTZ NULL`, `withdrawal_reason TEXT NULL`.
-- For WITHDRAWN require all withdrawal metadata and nonblank reason; actor must equal proposed_by while current role/scope still valid; validate role in service layer and audit.
-- Keep PostgreSQL partial UNIQUE index: only one PENDING proposal per issue. Decision vs withdrawal race under parent Shipment lock; loser 409, no duplicate audit transition.
+- Существующее перечисление статусов PENDING/APPROVED/REJECTED/WITHDRAWN сохраняется.
+- Добавьте `withdrawn_by UUID NULL`, `withdrawn_at TIMESTAMPTZ NULL`, `withdrawal_reason TEXT NULL`.
+- Для WITHDRAWN требуйте все метаданные отзыва и непустую причину; исполнитель должен совпадать с proposed_by при всё ещё действительных роли и области доступа; проверяйте роль в сервисном слое и ведите аудит.
+- Сохраните частичный индекс UNIQUE PostgreSQL: только одно предложение PENDING на проблему. Гонка решения и отзыва проходит под блокировкой родительской партии; проигравший получает 409, переход аудита не дублируется.
 
-### Final authorization constraints for CustodyIncident (OPEN-03)
+### Окончательные ограничения полномочий для CustodyIncident (OPEN-03)
 
-- Regional operator of Shipment region **opens** the incident and makes a separate administrative final decision, without impersonating the absent participant. `resolved_by` is a regional user, not a Courier handoff signer.
-- Origin-side Pickup review needs an active origin `SENDER_OPERATOR` attestation. Incident close does **not** set `handoffs.PICKUP=CONFIRMED`; withdrawal/cancellation remains an independent guarded Sender command. Disputed custody remains unchanged and is logged as `ESCALATED_NO_CUSTODY_CHANGE`.
-- Ordinary lab-side stalled Delivery needs destination `LAB_MANAGER` attestation to facts, not a surrogate Courier confirmation.
-- Exceptional Delivery requires 2 unique witness user IDs at the destination Lab (at least one `LAB_MANAGER`) + confirmed Pickup + regional administrative decision. `UNIQUE(incident_id,user_id)` guards duplication; service enforces role, location claim, current membership and reviewer-witness separation.
-- Resolve incident, create verified exceptional receipt evidence, supersede only pending Delivery Handoff, set container RECEIVED and open first receiving session **in one transaction**. For EXCEPTIONAL, `transport_containers.received_by=NULL` (avoid falsely representing REGIONAL_OPERATIONS as a physical recipient); `received_at` is server verification time, `container_receipt_evidence.verified_by` is the regional reviewer, and `custody_attestations` identify physical witnesses. NORMAL retains `received_by=actual_lab_confirmer`. Incomplete/invalid evidence must not commit the state change.
+- Региональный оператор региона партии **открывает** инцидент и принимает отдельное окончательное административное решение, не выдавая себя за отсутствующего участника. `resolved_by` — региональный пользователь, а не курьер, подписавший передачу.
+- Рассмотрение забора на стороне отправителя требует свидетельство действующего `SENDER_OPERATOR` отправляющей организации. Закрытие инцидента **не** устанавливает `handoffs.PICKUP=CONFIRMED`; отзыв/отмена остаётся отдельной защищённой командой отправителя. Спорное состояние передачи ответственности не меняется и записывается как `ESCALATED_NO_CUSTODY_CHANGE`.
+- Обычное рассмотрение задержанной доставки на стороне лаборатории требует свидетельство фактов от `LAB_MANAGER` целевой лаборатории, а не подмену подтверждения курьера.
+- Исключительная доставка требует 2 уникальных ID пользователей-свидетелей целевой лаборатории (хотя бы один `LAB_MANAGER`) + подтверждённый забор + региональное административное решение. `UNIQUE(incident_id,user_id)` защищает от дублирования; сервис проверяет роль, заявление о местонахождении, текущее назначение прав и разделение проверяющего и свидетелей.
+- Разрешите инцидент, создайте проверенное свидетельство исключительного получения, замените только ожидающую передачу доставки, установите контейнеру RECEIVED и откройте первую сессию приёмки **в одной транзакции**. Для EXCEPTIONAL задаётся `transport_containers.received_by=NULL` (чтобы ложно не представлять REGIONAL_OPERATIONS физическим получателем); `received_at` — серверное время проверки, `container_receipt_evidence.verified_by` — региональный проверяющий, а `custody_attestations` определяют физических свидетелей. NORMAL сохраняет `received_by=actual_lab_confirmer`. Неполные/недействительные свидетельства не должны позволять фиксацию изменения состояния.
 
-### Offline version relevance (OPEN-04)
+### Значимость версий для офлайн-команд (OPEN-04)
 
-Do not reject a Courier command merely because `Shipment.version` changed due to a different container's Sample outcome. Compare `manifest_revision`, **target** Container/Handoff custody version, confirmed Pickup phase/version, Courier assignment and active authorization. For whole-Shipment Pickup, compare Pickup phase/handoff version and complete manifest. Any relevant change (including an ABA target-state cycle) is stale. Version increments and checks occur under Shipment parent lock, and no relevant stale command is automatically rebased.
+Не отклоняйте команду курьера только потому, что `Shipment.version` изменилась из-за результата пробирки другого контейнера. Сравнивайте `manifest_revision`, версию передачи ответственности **целевого** контейнера/передачи, подтверждённую фазу/версию забора, назначение курьера и действующие полномочия. Для забора всей партии сравнивайте фазу забора/версию передачи и полный манифест. Любое значимое изменение (включая цикл ABA целевого состояния) означает устаревание. Увеличение и проверка версий происходят под блокировкой родительской партии; никакая значимо устаревшая команда не согласуется автоматически с новым состоянием.
 
-Stage G adds `transport_containers.state_version BIGINT` and `shipments.pickup_state_version BIGINT`; PostgreSQL guards reject direct reset/increment outside the guarded custody transitions. Snapshot versions are persisted with the PHI-free container code/status/version list. `idempotency_records` carries 90-day detail expiry and linked-command post-state metadata; the immutable tombstone preserves replay after compaction.
+Этап G добавляет `transport_containers.state_version BIGINT` и `shipments.pickup_state_version BIGINT`; защиты PostgreSQL отклоняют прямой сброс/увеличение вне защищённых переходов передачи ответственности. Версии снимка сохраняются со списком кодов/статусов/версий контейнеров без персональных медицинских данных. `idempotency_records` содержит срок хранения подробностей 90 дней и метаданные состояния после связанной команды; неизменяемая запись-маркер сохраняет возможность повторного получения результата после сокращения данных.
 
 ### `transport_containers`, `shipments`
-- Add monotonically increasing `transport_containers.state_version BIGINT NOT NULL DEFAULT 1`. Every custody state/handoff attempt mutation for that container increments version, even state ABA.
-- Add authoritative Pickup custody/phase version on Shipment or Pickup Handoff, to detect relevant Pickup changes without confusing unrelated receipt edits.
-- Existing `manifest_revision` stays frozen after seal; no modifications to identity/membership through direct SQL.
+- Добавьте монотонно возрастающую `transport_containers.state_version BIGINT NOT NULL DEFAULT 1`. Каждое изменение состояния передачи ответственности/попытки передачи этого контейнера увеличивает версию, даже при цикле ABA состояния.
+- Добавьте достоверную версию передачи ответственности/фазы забора в партию или передачу забора, чтобы выявлять значимые изменения забора, не смешивая их с несвязанными изменениями приёмки.
+- Существующая `manifest_revision` остаётся замороженной после запечатывания; прямой SQL не должен менять идентичность/состав.
 
-### `shipments` creation/seal
-- `expected_delivery_at` nullable in DRAFT; seal requires non-null value strictly greater than DB `CURRENT_TIMESTAMP` as evaluated in transaction (avoid stale app clock). This is cross-field/state validation in service and optionally DB protected trigger.
-- Destination must match single seeded/configured pilot lab on both CreateShipment and seal (do **not** hardcode UUID into SQL migration). Region and organization memberships checked under transaction.
+### Создание/запечатывание `shipments`
+- `expected_delivery_at` допускает null в DRAFT; запечатывание требует ненулевое значение строго больше `CURRENT_TIMESTAMP` БД, вычисленного внутри транзакции (во избежание устаревших часов приложения). Это проверка связанных полей/состояния в сервисе и, при необходимости, защищённом триггере БД.
+- Получатель должен совпадать с единственной созданной начальными данными/настроенной пилотной лабораторией при CreateShipment и запечатывании (**не** зашивайте UUID в SQL-миграцию). Принадлежность региону и организации проверяется внутри транзакции.
 
 ### `issue_reason_codes`
-Fixed 6 seeded (scope,kind,code) rows, RU labels as in [Decision Register](20-decisions-v061.md). Seed unique codes, no user editing endpoints; foreign keys from issue/sample result still validated for matching scope+kind (composite FK or guarded trigger).
+Шесть фиксированных начальных строк (scope,kind,code), русские подписи как в [реестре решений](20-decisions-v061.md). Создайте уникальные коды, без конечных точек пользовательского редактирования; внешние ключи проблем/результатов пробирок по-прежнему проверяются на соответствие scope+kind (составным внешним ключом или защищённым триггером).
 
-## 3. Notification semantics
+## 3. Семантика уведомлений
 
-- Each notification is persisted in PostgreSQL; `read_at` NULL means unread, UTC server clock.
-- Use unique key `(recipient_user_id,event_id,type)` to deduplicate retries.
-- Notification creation via Celery best effort means Inbox **may miss** a notification if worker/publish fails. **Source of truth for stalled cases remains query from Shipment/Handoff/Proposal timestamps in PostgreSQL**, not Inbox.
-- Only recipient can mark their notification read. A regional escalation cannot reveal tube-level data to REGION_ANALYST.
-- If durable Inbox publication is later required as invariant, use transactional outbox; **not** implied by best-effort product choice.
+- Каждое уведомление сохраняется в PostgreSQL; `read_at` NULL означает непрочитанное, используются серверные часы UTC.
+- Используйте уникальный ключ `(recipient_user_id,event_id,type)` для устранения дублей при повторных попытках.
+- Создание уведомлений через Celery без гарантии доставки означает, что входящие уведомления **могут пропустить** уведомление при сбое обработчика/публикации. **Источником истины для задержанных случаев остаётся запрос по отметкам времени партии/передачи/предложения в PostgreSQL**, а не входящие уведомления.
+- Только получатель может отметить своё уведомление прочитанным. Региональная эскалация не должна раскрывать данные отдельных пробирок роли REGION_ANALYST.
+- Если позднее надёжная публикация входящих уведомлений потребуется как инвариант, используйте транзакционную таблицу исходящих сообщений; продуктовый выбор доставки без гарантий этого **не** подразумевает.
 
-## 4. Transaction boundaries & lock order
+## 4. Границы транзакций и порядок блокировки
 
-For all writes including attestation, exceptional finalization (once approved), proposal withdrawal, and offline sync:
-1. Authenticate/validate shape, begin TX.
-2. Reserve idempotency key or per-command replay identity first.
-3. Acquire `SELECT ... FOR UPDATE` Shipment as aggregate root.
-4. Lock target containers, handoffs, incidents/proposals, receipt evidence rows in deterministic order.
-5. Check roles, physical/custody status, manifest/snapshot versions, conflicting evidence, valid reason and recipient scope; update entities, append audit/revisions, save replay response in same commit.
-6. Commit; schedule optional Celery best-effort after commit.
+Для всех записей, включая свидетельства, исключительное завершение (после утверждения), отзыв предложения и офлайн-синхронизацию:
+1. Аутентифицируйте пользователя/проверьте структуру, начните транзакцию.
+2. Сначала зарезервируйте ключ идемпотентности или идентичность повторного выполнения отдельной команды.
+3. Заблокируйте партию как корень агрегата через `SELECT ... FOR UPDATE`.
+4. Блокируйте строки целевых контейнеров, передач, инцидентов/предложений и свидетельств получения в детерминированном порядке.
+5. Проверьте роли, физический статус/статус передачи ответственности, версии манифеста/снимка, противоречащие свидетельства, допустимую причину и область доступа получателя; обновите сущности, добавьте аудит/исправления, сохраните ответ повторного выполнения в той же фиксации.
+6. Зафиксируйте транзакцию; после фиксации запланируйте необязательную задачу Celery без гарантии выполнения.
 
-A trigger reacting to direct SQL may acquire child row locks before the parent; this can deadlock against parent-first application TX. Restrict DB roles and integration-test direct SQL seal races, retry SQLSTATE 40P01 when appropriate. Never claim triggers alone prove deadlock freedom.
+Триггер прямого SQL может захватить блокировки дочерних строк раньше родительской; это может вызвать взаимную блокировку с транзакцией приложения, блокирующей сначала родителя. Ограничивайте роли БД и интеграционно проверяйте гонки запечатывания через прямой SQL; при необходимости повторяйте операцию после SQLSTATE 40P01. Никогда не утверждайте, что одни триггеры доказывают отсутствие взаимных блокировок.
 
-## 5. Key SQL patterns (illustrative, **not** complete migrations)
+## 5. Основные шаблоны SQL (иллюстрации, **не** полные миграции)
 
 ```sql
 CREATE UNIQUE INDEX uq_custody_attestation_actor
@@ -96,17 +96,17 @@ CREATE UNIQUE INDEX uq_offline_command_tombstone
   ON offline_command_tombstones (actor_id,client_command_id);
 ```
 
-Checks: receipt evidence XOR normal_handoff_id/incident_id; immutable evidence; proposal withdrawal metadata; reason codes match scope/kind; one open receiving session per Shipment; sealed manifest immutable; no Sample result without verified Container receipt evidence.
+Проверки: XOR normal_handoff_id/incident_id в свидетельстве получения; неизменяемость свидетельства; метаданные отзыва предложения; соответствие кодов причин scope/kind; одна открытая сессия приёмки на партию; неизменяемость запечатанного манифеста; отсутствие результата пробирки без проверенного свидетельства получения контейнера.
 
-## 6. Migration/verification strategy
+## 6. Стратегия миграции и проверки
 
-1. Introduce new tables first; nullable references and safe new enums before changing write paths.
-2. Add state_version and Pickup phase version, guarded by service mutations.
-3. Add proposal withdrawal fields and status processing.
-4. Seed six codes; backfill demo-only fixtures where needed.
-5. Add idempotency tombstone and 90d response retention logic; verify replay across archival.
-6. Add durable Inbox/read_at and indexes; connect Celery best-effort tasks.
-7. Add incident/evidence models with **approved witness/pickup/role guards** and unit + PostgreSQL tests; feature flag may be used for controlled rollout but no product sign-off remains pending.
-8. Apply real Alembic migrations against PostgreSQL, validate upgrade and rollback/forward on disposable DB; test row-level security boundaries at application layer.
+1. Сначала введите новые таблицы; допускающие null ссылки и безопасные новые перечисления — до изменения путей записи.
+2. Добавьте state_version и версию фазы забора, защищённые изменениями сервисного слоя.
+3. Добавьте поля отзыва предложения и обработку статуса.
+4. Создайте шесть кодов; при необходимости дополните только демонстрационные тестовые данные.
+5. Добавьте запись-маркер идемпотентности и логику хранения ответов 90 дней; проверьте повторное выполнение после архивирования.
+6. Добавьте сохраняемые входящие уведомления/read_at и индексы; подключите задачи Celery без гарантии выполнения.
+7. Добавьте модели инцидентов/свидетельств с **утверждёнными проверками свидетелей/забора/ролей** и модульными тестами плюс тестами PostgreSQL; для контролируемого внедрения можно использовать флаг функции, но ожидающих продуктового согласования решений не осталось.
+8. Примените реальные миграции Alembic к PostgreSQL, проверьте обновление и откат/повторное применение на одноразовой БД; проверьте границы доступа к строкам на уровне приложения.
 
-The current schema is defined by the committed Alembic migrations and backend models. This document remains a requirement/design delta; its migration strategy below is not a statement that those steps remain pending. For the concise runtime model, see [data and integrity](data-and-integrity.md).
+Текущую схему определяют сохранённые в репозитории миграции Alembic и серверные модели. Этот документ остаётся описанием требований/проектных изменений; приведённая стратегия миграции не утверждает, что эти шаги ещё предстоит выполнить. Краткую модель работающего приложения см. в [данных и целостности](data-and-integrity.md).

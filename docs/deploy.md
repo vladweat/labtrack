@@ -1,44 +1,27 @@
-# Demo deployment and local sandbox
+# Развёртывание демонстрационного стенда и локальная песочница
 
-## What this repository demonstrates
+## Что демонстрирует этот репозиторий
 
-LabTrack models sample custody and laboratory shipments. Its existing synthetic
-demo is Sender → Courier → Lab: it provisions four scoped demo accounts, creates
-a sample and shipment, seals a container, and leaves the shipment
-`READY_FOR_PICKUP`.
+LabTrack моделирует передачу ответственности за пробирки и лабораторные перевозки. Существующий синтетический демонстрационный сценарий — отправитель → курьер → лаборатория: он создаёт четыре демонстрационные учётные записи с ограниченными областями доступа, создаёт пробирку и партию, запечатывает контейнер и оставляет партию в статусе `READY_FOR_PICKUP`.
 
-The seed passwords are read from `DEMO_*_PASSWORD` environment variables; they
-are not embedded in the seed code. Use unique generated values in a private
-environment file. Demo email addresses end in `.example.test`. The seed only
-calls the local LabTrack API. The tracked Compose overlay restricts the one-shot
-seed service to the internal data network.
+Пароли начальных учётных записей читаются из переменных окружения `DEMO_*_PASSWORD`; они не встроены в код заполнения данных. Используйте уникальные сгенерированные значения в закрытом файле окружения. Демонстрационные адреса электронной почты заканчиваются на `.example.test`. Заполнение обращается только к локальному API LabTrack. Хранимое в репозитории дополнение Compose ограничивает одноразовый сервис заполнения внутренней сетью данных.
 
-## Seed guard
+## Защита заполнения демонстрационными данными
 
-`python -m app.cli seed-demo` refuses to run unless all of these conditions are
-true:
+`python -m app.cli seed-demo` отказывается запускаться, если не выполнены все условия:
 
 - `APP_ENV=demo`
 - `DEMO_SEED_ENABLED=true`
-- `POSTGRES_DB` contains the `demo` or `test` component and contains no
-  `prod`, `production`, or `live` component
-- `DEMO_API_URL` targets `http://api:8000`, localhost, or loopback on port 8000
+- `POSTGRES_DB` содержит компонент `demo` или `test` и не содержит компоненты `prod`, `production` или `live`
+- `DEMO_API_URL` указывает на `http://api:8000`, localhost или интерфейс обратной петли на порту 8000
 
-The opt-in defaults to false. The production API and migration services keep
-`APP_ENV=production`; only the one-shot seed service receives the demo mode and
-opt-in from [compose.demo-seed.yaml](../compose.demo-seed.yaml). The deployment
-Compose project uses `labtrack_demo_postgres_data`; development uses the
-independent `labtrack_dev_postgres_data` volume.
+По умолчанию явное разрешение отключено. Сервисы производственного API и миграций сохраняют `APP_ENV=production`; только одноразовый сервис заполнения получает демонстрационный режим и явное разрешение из [compose.demo-seed.yaml](../compose.demo-seed.yaml). Проект Compose для развёртывания использует `labtrack_demo_postgres_data`; разработка использует независимый том `labtrack_dev_postgres_data`.
 
-## Reproduce locally with isolated synthetic data
+## Локальное воспроизведение с изолированными синтетическими данными
 
-These commands use a separate Compose project and PostgreSQL volume. They do not
-use the public demo environment or its database. Run them from the repository
-root. Docker must already have the `postgres:15` image because development
-Compose is configured not to pull images.
+Эти команды используют отдельный проект Compose и том PostgreSQL. Они не используют публичную демонстрационную среду или её базу данных. Выполняйте их из корня репозитория. Образ `postgres:15` уже должен быть доступен в Docker, поскольку Compose для разработки настроен без скачивания образов.
 
-Create a private environment file containing fresh synthetic-only credentials;
-the script writes it with mode `0600` and does not print the values:
+Создайте закрытый файл окружения с новыми учётными данными только для синтетической среды; скрипт записывает его с правами `0600` и не печатает значения:
 
 ```bash
 python3 - <<'PY'
@@ -79,7 +62,7 @@ print("Created .env.demo.sandbox with private synthetic credentials (values omit
 PY
 ```
 
-Start the isolated database, migrate, and run the API in one terminal:
+Запустите изолированную базу данных, примените миграции и запустите API в одном терминале:
 
 ```bash
 docker compose --project-name labtrack-demo-sandbox \
@@ -92,7 +75,7 @@ set +a
 .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --no-proxy-headers
 ```
 
-In another terminal, from `backend/`, seed the synthetic workflow:
+В другом терминале из `backend/` заполните синтетический рабочий процесс:
 
 ```bash
 set -a
@@ -101,13 +84,9 @@ set +a
 .venv/bin/python -m app.cli seed-demo
 ```
 
-The command is idempotent: it reuses the four correctly scoped accounts and the
-same idempotency keys for the synthetic sample and shipment. It prints the
-synthetic Courier email and Shipment ID, but never prints a password. The web
-client can be started separately with `cd web && npm ci && npm run dev`; use
-only the generated `.example.test` accounts for local walkthroughs.
+Команда идемпотентна: она повторно использует четыре учётные записи с правильными областями доступа и те же ключи идемпотентности для синтетических пробирки и партии. Она выводит синтетический адрес электронной почты курьера и идентификатор партии, но никогда не выводит пароль. Веб-клиент можно запустить отдельно командой `cd web && npm ci && npm run dev`; для локального знакомства используйте только сгенерированные учётные записи `.example.test`.
 
-To reset only this sandbox, stop the API, then run from the repository root:
+Чтобы сбросить только эту песочницу, остановите API и выполните из корня репозитория:
 
 ```bash
 docker compose --project-name labtrack-demo-sandbox \
@@ -115,21 +94,13 @@ docker compose --project-name labtrack-demo-sandbox \
 rm .env.demo.sandbox
 ```
 
-This removes the sandbox volume named
-`labtrack_demo_sandbox_postgres_data`, not the development or public demo
-volumes. Recreate the environment file and repeat the setup to start over. Do
-not use this reset command with the public deployment project.
+Это удаляет том песочницы `labtrack_demo_sandbox_postgres_data`, сохраняя тома разработки и публичного демонстрационного стенда. Чтобы начать заново, пересоздайте файл окружения и повторите настройку. Не используйте эту команду сброса с проектом публичного развёртывания.
 
-Для проверки backup/restore только этой локальной synthetic БД см.
-[воспроизводимый drill](backup-restore.md). Он не является инструкцией
-восстановления public demo.
+Для проверки резервного копирования и восстановления только этой локальной синтетической БД см. [воспроизводимую проверку](backup-restore.md). Она не является инструкцией восстановления публичного демонстрационного стенда.
 
-## Public synthetic demo
+## Публичный синтетический демонстрационный стенд
 
-The base `deploy/demo/compose.yaml` and its `.env` are environment-private
-deployment files and are not in this source checkout. Run the following from
-the deployment checkout that contains them; the tracked overlay is in this
-repository. Start the one-shot seed with:
+Базовый файл `deploy/demo/compose.yaml` и его `.env` — закрытые файлы среды развёртывания, которых нет в этой копии исходников. Выполняйте следующие команды из рабочей копии развёртывания, содержащей эти файлы; дополнение хранится в этом репозитории. Запустите одноразовое заполнение:
 
 ```bash
 docker compose --project-name labtrack-demo \
@@ -139,44 +110,18 @@ docker compose --project-name labtrack-demo \
   --profile demo-seed run --rm seed
 ```
 
-The overlay sets `APP_ENV=demo` and `DEMO_SEED_ENABLED=true` only on that
-service, restricts it to the internal network, and preserves the existing
-volume names by default. It accepts `DEMO_POSTGRES_VOLUME`,
-`DEMO_CADDY_DATA_VOLUME`, and `DEMO_CADDY_CONFIG_VOLUME` overrides when a
-separate deployment sandbox needs its own volumes. Keep `DEMO_*_PASSWORD`,
-database passwords, and `JWT_SECRET_KEY` in the private deployment environment
-file. Do not copy them into this repository, issue output, screenshots, or
-shared logs. The seed is idempotent and is not a reset of the shared public
-demo.
+Дополнение задаёт `APP_ENV=demo` и `DEMO_SEED_ENABLED=true` только для этого сервиса, ограничивает его внутренней сетью и по умолчанию сохраняет существующие имена томов. Оно принимает переопределения `DEMO_POSTGRES_VOLUME`, `DEMO_CADDY_DATA_VOLUME` и `DEMO_CADDY_CONFIG_VOLUME`, когда отдельной песочнице развёртывания нужны собственные тома. Храните `DEMO_*_PASSWORD`, пароли базы данных и `JWT_SECRET_KEY` в закрытом файле окружения развёртывания. Не копируйте их в этот репозиторий, вывод в задачах, скриншоты или общедоступные журналы. Заполнение идемпотентно и не сбрасывает общий публичный демонстрационный стенд.
 
-### Login source address behind the public edge
 
-The public repository does not contain `deploy/demo/compose.yaml` or an active
-Caddy/Nginx configuration. The older private checkout also has no tracked edge
-configuration. The API Dockerfiles in this repository start Uvicorn with
-`--no-proxy-headers`, but a private Compose `command` can override that default.
-The deployed Uvicorn command, edge header rules, API reachability, and actual
-proxy peer therefore remain unverified from this repository.
+### Адрес источника входа за публичным пограничным прокси
 
-Keep `LOGIN_TRUSTED_PROXY_NETWORKS` empty until the deployment owner verifies
-all of the following against the running configuration:
+Публичный репозиторий не содержит `deploy/demo/compose.yaml` или активной конфигурации Caddy/Nginx. В старой закрытой рабочей копии также нет отслеживаемой конфигурации пограничного прокси. Dockerfile API в этом репозитории запускают Uvicorn с `--no-proxy-headers`, но параметр `command` в закрытом Compose может изменить это поведение. Команда запуска развёрнутого Uvicorn, правила заголовков, доступность API и фактический адрес прокси остаются непроверенными по материалам репозитория.
 
-1. Uvicorn still starts with `--no-proxy-headers`; proxy middleware must not
-   rewrite `request.client.host` before the login limiter reads the immediate
-   transport peer.
-2. Untrusted clients cannot connect directly to the API and bypass the edge.
-3. The edge removes or overwrites any incoming `X-Real-IP`, then sets it to the
-   validated client address. If another load balancer precedes Caddy/Nginx,
-   that proxy must be explicitly trusted there and the client address must be
-   derived from the validated proxy chain. Remove incoming `X-Forwarded-For`;
-   the application does not use it for rate limiting.
-4. `LOGIN_TRUSTED_PROXY_NETWORKS` contains only the immediate proxy peer's
-   pinned `/32` or `/128`, never a shared Docker subnet or broad proxy range.
+Оставьте `LOGIN_TRUSTED_PROXY_NETWORKS` пустым, пока владелец развёртывания не проверит все условия по работающей конфигурации:
 
-For a direct Caddy edge, the reverse-proxy handler can set `X-Real-IP` from
-`{client_ip}` and remove `X-Forwarded-For`; these are required settings to
-verify or add in the private Caddyfile, not claims about the current deployment.
-If the proxy peer cannot be pinned and isolated, leave the setting empty: the
-limiter will use the transport peer, so clients behind a shared proxy will
-share a bucket. The application does not trust client-supplied identity by
-default.
+1. Uvicorn запускается с `--no-proxy-headers`; обработчик прокси-заголовков не подменяет `request.client.host` до чтения непосредственного транспортного узла ограничителем входа.
+2. Недоверенные клиенты не могут подключаться к API напрямую в обход пограничного прокси.
+3. Пограничный прокси удаляет или перезаписывает входящий `X-Real-IP`, затем задаёт проверенный адрес клиента. Если перед Caddy/Nginx находится балансировщик, доверие к нему задаётся явно, а адрес клиента определяется по проверенной цепочке прокси. Входящий `X-Forwarded-For` удаляется; приложение не использует его для ограничения попыток входа.
+4. `LOGIN_TRUSTED_PROXY_NETWORKS` содержит только закреплённый адрес непосредственного прокси `/32` или `/128`, без общей подсети Docker или широкого диапазона прокси.
+
+При прямом подключении клиента к Caddy обработчик обратного прокси может формировать `X-Real-IP` из `{client_ip}` и удалять `X-Forwarded-For`. Эти настройки необходимо проверить или добавить в закрытый Caddyfile; их наличие в текущем развёртывании не подтверждено. Если адрес прокси нельзя закрепить и изолировать, оставьте настройку пустой: ограничитель использует транспортный адрес, а клиенты за общим прокси делят один счётчик. По умолчанию приложение не доверяет адресам, переданным клиентом.
